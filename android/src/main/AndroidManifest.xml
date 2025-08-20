@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
   package="com.iav3.iatracking">
   
-  <!-- No specific permissions required for basic tracking functionality -->
+  <!-- Internet permission required for API synchronization -->
+  <uses-permission android:name="android.permission.INTERNET" />
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
   
 </manifest>

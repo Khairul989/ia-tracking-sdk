@@ -11,12 +11,18 @@ IA Tracking SDKs for comprehensive user action tracking in Flutter applications.
   s.author           = { 'IAv3 Team' => 'flutter-support@iav3.com' }
   
   s.source           = { :path => '.' }
+  
+  # DEVELOPMENT MODE: Source code visible (current)
   s.source_files     = 'Classes/**/*'
+  
+  # PRODUCTION MODE: Use compiled framework (uncomment for production)
+  # s.vendored_frameworks = 'Frameworks/IaTracking.framework'
+  # s.source_files = 'Classes/IaTrackingPlugin.h' # Only header for Flutter bridge
+  
   s.dependency 'Flutter'
   
-  # Reference to our native iOS SDK
-  # TODO: Uncomment when native iOS SDK is properly integrated
-  # s.dependency 'IATracking', '~> 1.0.0'
+  # Optional: If you have a separate native iOS SDK
+  # s.dependency 'IATrackingCore', '~> 1.0.0'
   
   s.platform = :ios, '12.0'
 

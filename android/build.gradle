@@ -49,6 +49,13 @@ android {
     dependencies {
         implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
         
+        // HTTP client for API calls
+        implementation 'com.squareup.okhttp3:okhttp:4.11.0'
+        implementation 'com.google.code.gson:gson:2.10.1'
+        
+        // Coroutines for async operations
+        implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.4'
+        
         // Reference to our native Android SDK
         // TODO: Uncomment when native Android SDK is properly integrated
         // implementation project(path: ':android-sdk')

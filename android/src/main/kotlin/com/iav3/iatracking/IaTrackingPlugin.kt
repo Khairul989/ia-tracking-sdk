@@ -8,40 +8,158 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
+import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
+import java.io.IOException
+import java.util.*
+import java.util.concurrent.TimeUnit
+import java.security.MessageDigest
+import java.util.Base64
 
 /**
- * Flutter plugin for IA Tracking Android SDK
+ * Flutter plugin for IA Tracking Android SDK with automatic API flushing
  * 
- * This plugin provides Flutter bindings for the native Android IA Tracking SDK,
- * allowing Flutter apps to track user actions using the high-performance native implementation.
+ * This plugin provides Flutter bindings for user action tracking with automatic
+ * synchronization to a remote API every 5 seconds.
  * 
- * NOTE: This is currently a mock implementation for demonstration purposes.
- * In production, this would integrate with the actual native Android SDK.
+ * Features:
+ * - Local storage of user actions
+ * - Automatic flush to API every 5 seconds
+ * - HTTP client integration with OkHttp
+ * - Comprehensive error handling and retry logic
  */
 class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
 
     companion object {
         private const val TAG = "IaTrackingPlugin"
         private const val CHANNEL_NAME = "ia_tracking"
+        private const val FLUSH_INTERVAL_MS = 5000L // 5 seconds
+        
+        // Hardcoded API endpoints - replace with your actual endpoints
+        private const val API_BASE_URL = "https://api.iatracking.com"
+        private const val TRACKING_ENDPOINT = "$API_BASE_URL/v1/track"
+        
+        // Development endpoints (you can switch based on build config)
+        private const val DEV_API_BASE_URL = "https://dev-api.iatracking.com"
+        private const val STAGING_API_BASE_URL = "https://staging-api.iatracking.com"
     }
 
     private lateinit var channel: MethodChannel
     private lateinit var context: Context
-    private val coroutineScope = CoroutineScope(Dispatchers.Main)
+    private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     
-    // Mock tracking state
+    // Tracking state
     private var isInitialized = false
     private var isEnabled = true
     private var currentUserId: String? = null
-    private var actionCount = 0
+    private var currentSessionId: String = generateSessionId()
+    private var apiUrl: String? = null // Must be provided during initialization
+    private var apiKey: String? = null
     
-    // Real action storage for tracking user interactions
-    private val userActions = mutableListOf<Map<String, Any?>>()
-    private fun generateActionId(): String = "action_${System.currentTimeMillis()}_${(1000..9999).random()}"
-    private fun getCurrentSession(): String = "session_demo_${System.currentTimeMillis() / 1000}"
+    // Enhanced features state
+    private var trackingEnabled = true
+    private var dataSharingEnabled = true
+    private var allTrackingStopped = false
+    private var currentDeviceId: String? = null
+    private var sessionTimeoutMinutes = 30
+    private var fcmToken: String? = null
+    private val globalProperties = mutableMapOf<String, String>()
+    
+    // SDK info
+    private var wrapperName: String? = null
+    private var wrapperVersion: String? = null
+    private val sdkVersion = "1.0.0"
+    
+    // Action storage with sync tracking
+    private val userActions = Collections.synchronizedList(mutableListOf<UserAction>())
+    private val gson = Gson()
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .writeTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .build()
+    
+    // Auto-flush timer
+    private var flushTimer: Timer? = null
+    
+    // Data classes for user actions
+    data class UserAction(
+        val id: String,
+        val actionType: String,
+        val screenName: String?,
+        val elementId: String?,
+        val elementType: String?,
+        val userId: String?,
+        val sessionId: String,
+        val timestamp: Long,
+        val properties: Map<String, Any?>,
+        val deviceInfo: Map<String, Any?>,
+        val appVersion: String?,
+        val sdkVersion: String = "1.0.0",
+        var isSynced: Boolean = false,
+        var retryCount: Int = 0
+    )
+    
+    // Helper functions
+    private fun generateActionId(): String = "action_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}"
+    private fun generateSessionId(): String = "session_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}"
+    
+    private fun createDeviceInfo(): Map<String, Any?> = mapOf(
+        "platform" to "android",
+        "deviceModel" to android.os.Build.MODEL,
+        "osVersion" to android.os.Build.VERSION.RELEASE,
+        "manufacturer" to android.os.Build.MANUFACTURER
+    )
+    
+    /**
+     * Get API URL from multiple sources (priority order):
+     * 1. Environment variable IA_TRACKING_API_URL
+     * 2. Configuration serverUrl parameter
+     * 3. Decoded base64 serverUrl parameter
+     */
+    private fun resolveApiUrl(configServerUrl: String?): String? {
+        // 1. Check environment variable first (highest priority)
+        val envApiUrl = System.getenv("IA_TRACKING_API_URL")
+        if (!envApiUrl.isNullOrBlank()) {
+            Log.d(TAG, "Using API URL from environment variable")
+            return envApiUrl
+        }
+        
+        // 2. Check if provided URL is base64 encoded
+        if (!configServerUrl.isNullOrBlank()) {
+            return try {
+                if (configServerUrl.startsWith("aHR0c")) { // Base64 encoded HTTPS URLs typically start with this
+                    val decoded = String(Base64.getDecoder().decode(configServerUrl))
+                    Log.d(TAG, "Using decoded base64 API URL")
+                    decoded
+                } else {
+                    configServerUrl
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to decode base64 URL, using as-is")
+                configServerUrl
+            }
+        }
+        
+        return null
+    }
+    
+    /**
+     * Hash sensitive data for logging (never log actual API URLs)
+     */
+    private fun hashForLogging(data: String): String {
+        return try {
+            val digest = MessageDigest.getInstance("SHA-256")
+            val hash = digest.digest(data.toByteArray())
+            hash.joinToString("") { "%02x".format(it) }.take(8) // First 8 chars of hash
+        } catch (e: Exception) {
+            "unknown"
+        }
+    }
 
     override fun onAttachedToEngine(@NonNull flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         channel = MethodChannel(flutterPluginBinding.binaryMessenger, CHANNEL_NAME)
@@ -54,6 +172,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
         Log.d(TAG, "Method called: ${call.method}")
         
         when (call.method) {
+            // Core tracking methods
             "initialize" -> initialize(call, result)
             "trackScreenView" -> trackScreenView(call, result)
             "trackButtonTap" -> trackButtonTap(call, result)
@@ -72,55 +191,277 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
             "performCleanup" -> performCleanup(result)
             "deleteAllUserData" -> deleteAllUserData(result)
             "flush" -> flush(result)
+            
+            // Enhanced features (inspired by Singular SDK)
+            "initializeEnhanced" -> initializeEnhanced(call, result)
+            "trackRevenue" -> trackRevenue(call, result)
+            "trackIOSInAppPurchase" -> trackIOSInAppPurchase(call, result)
+            "trackAndroidInAppPurchase" -> trackAndroidInAppPurchase(call, result)
+            "setGlobalProperty" -> setGlobalProperty(call, result)
+            "unsetGlobalProperty" -> unsetGlobalProperty(call, result)
+            "getGlobalProperties" -> getGlobalProperties(result)
+            "clearGlobalProperties" -> clearGlobalProperties(result)
+            "setTrackingEnabled" -> setTrackingEnabled(call, result)
+            "isTrackingEnabled" -> isTrackingEnabled(result)
+            "setDataSharingEnabled" -> setDataSharingEnabled(call, result)
+            "isDataSharingEnabled" -> isDataSharingEnabled(result)
+            "trackingOptIn" -> trackingOptIn(result)
+            "trackingOptOut" -> trackingOptOut(result)
+            "stopAllTracking" -> stopAllTracking(result)
+            "resumeAllTracking" -> resumeAllTracking(result)
+            "isAllTrackingStopped" -> isAllTrackingStopped(result)
+            "setDeviceId" -> setDeviceId(call, result)
+            "unsetDeviceId" -> unsetDeviceId(result)
+            "setSessionTimeout" -> setSessionTimeout(call, result)
+            
+            // SKAdNetwork methods (iOS only - will return not implemented on Android)
+            "skanRegisterAppForAttribution" -> skanRegisterAppForAttribution(result)
+            "skanUpdateConversionValue" -> skanUpdateConversionValue(call, result)
+            "skanUpdateConversionValues" -> skanUpdateConversionValues(call, result)
+            "skanGetConversionValue" -> skanGetConversionValue(result)
+            
+            // Push notifications and uninstall tracking
+            "registerDeviceTokenForUninstall" -> registerDeviceTokenForUninstall(call, result)
+            "setFCMDeviceToken" -> setFCMDeviceToken(call, result)
+            "handlePushNotification" -> handlePushNotification(call, result)
+            
+            // Advanced configuration
+            "setWrapperInfo" -> setWrapperInfo(call, result)
+            "getSdkVersion" -> getSdkVersion(result)
+            
             else -> result.notImplemented()
         }
     }
 
     override fun onDetachedFromEngine(@NonNull binding: FlutterPlugin.FlutterPluginBinding) {
         channel.setMethodCallHandler(null)
+        stopAutoFlush()
+        coroutineScope.cancel()
+        httpClient.dispatcher.executorService.shutdown()
         Log.d(TAG, "Plugin detached from engine")
     }
+    
+    /**
+     * Start automatic flush timer that sends unsynced actions to API every 5 seconds
+     */
+    private fun startAutoFlush() {
+        stopAutoFlush() // Stop any existing timer
+        
+        flushTimer = Timer().apply {
+            scheduleAtFixedRate(object : TimerTask() {
+                override fun run() {
+                    if (isEnabled && isInitialized) {
+                        flushUnsyncedActions()
+                    }
+                }
+            }, FLUSH_INTERVAL_MS, FLUSH_INTERVAL_MS)
+        }
+        
+        Log.d(TAG, "Auto-flush started with ${FLUSH_INTERVAL_MS}ms interval")
+    }
+    
+    /**
+     * Stop automatic flush timer
+     */
+    private fun stopAutoFlush() {
+        flushTimer?.cancel()
+        flushTimer = null
+        Log.d(TAG, "Auto-flush stopped")
+    }
+    
+    /**
+     * Flush unsynced actions to the API
+     */
+    private fun flushUnsyncedActions() {
+        coroutineScope.launch {
+            try {
+                // Skip if no API URL configured
+                if (apiUrl.isNullOrBlank()) {
+                    Log.d(TAG, "No API URL configured, skipping auto-flush")
+                    return@launch
+                }
+                
+                val unsyncedActions = userActions.filter { !it.isSynced && it.retryCount < 3 }
+                
+                if (unsyncedActions.isEmpty()) {
+                    Log.d(TAG, "No unsynced actions to flush")
+                    return@launch
+                }
+                
+                Log.d(TAG, "Flushing ${unsyncedActions.size} unsynced actions to API")
+                
+                // Send actions to API
+                val success = sendActionsToApi(unsyncedActions)
+                
+                if (success) {
+                    // Mark actions as synced
+                    unsyncedActions.forEach { action ->
+                        action.isSynced = true
+                    }
+                    Log.d(TAG, "Successfully synced ${unsyncedActions.size} actions")
+                } else {
+                    // Increment retry count for failed actions
+                    unsyncedActions.forEach { action ->
+                        action.retryCount++
+                    }
+                    Log.w(TAG, "Failed to sync actions, retry count incremented")
+                }
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Error during auto-flush", e)
+            }
+        }
+    }
+    
+    /**
+     * Send actions to the remote API
+     */
+    private suspend fun sendActionsToApi(actions: List<UserAction>): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                // Double-check API URL is still valid
+                val currentApiUrl = apiUrl
+                if (currentApiUrl.isNullOrBlank()) {
+                    Log.w(TAG, "No API URL configured, cannot send actions")
+                    return@withContext false
+                }
+                
+                val jsonPayload = gson.toJson(mapOf(
+                    "actions" to actions,
+                    "metadata" to mapOf(
+                        "sdkVersion" to "1.0.0",
+                        "platform" to "android",
+                        "timestamp" to System.currentTimeMillis()
+                    )
+                ))
+                
+                val requestBody = jsonPayload.toRequestBody("application/json".toMediaType())
+                val requestBuilder = Request.Builder()
+                    .url(currentApiUrl)
+                    .post(requestBody)
+                    .addHeader("Content-Type", "application/json")
+                    .addHeader("User-Agent", "IA-Tracking-Android-SDK/1.0.0")
+                
+                // Add API key if configured
+                apiKey?.let { key ->
+                    requestBuilder.addHeader("Authorization", "Bearer $key")
+                }
+                
+                val request = requestBuilder.build()
+                
+                httpClient.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        Log.d(TAG, "API request successful: ${response.code}")
+                        true
+                    } else {
+                        Log.w(TAG, "API request failed: ${response.code} - ${response.message}")
+                        false
+                    }
+                }
+                
+            } catch (e: IOException) {
+                Log.e(TAG, "Network error during API request", e)
+                false
+            } catch (e: Exception) {
+                Log.e(TAG, "Unexpected error during API request", e)
+                false
+            }
+        }
+    }
 
-    // Mock implementation methods
+    // Implementation methods
     private fun initialize(call: MethodCall, result: Result) {
         try {
             val arguments = call.arguments as? Map<String, Any>
-            Log.d(TAG, "Initializing with arguments: $arguments")
+            Log.d(TAG, "Initializing SDK")
             
-            // Mock initialization
-            isInitialized = true
+            // Extract configuration
             currentUserId = arguments?.get("userId") as? String
+            apiKey = arguments?.get("apiKey") as? String
+            
+            // Use hardcoded API endpoint
+            apiUrl = TRACKING_ENDPOINT
+            
+            // Start new session
+            currentSessionId = generateSessionId()
+            
+            // Mark as initialized
+            isInitialized = true
+            
+            // Start auto-flush timer
+            startAutoFlush()
             
             result.success(null)
-            Log.d(TAG, "Initialization successful")
+            Log.d(TAG, "Initialization successful - API configured: ${hashForLogging(resolvedApiUrl)}, Auto-flush started")
         } catch (e: Exception) {
             Log.e(TAG, "Initialization failed", e)
             result.error("INITIALIZATION_ERROR", "Failed to initialize: ${e.message}", null)
         }
     }
+    
+    /**
+     * Validate API URL for security and format
+     */
+    private fun isValidApiUrl(url: String): Boolean {
+        return try {
+            val parsedUrl = java.net.URL(url)
+            
+            // Must be HTTPS for security
+            if (parsedUrl.protocol != "https") {
+                Log.w(TAG, "API URL must use HTTPS protocol")
+                return false
+            }
+            
+            // Basic domain validation - prevent localhost, private IPs, etc.
+            val host = parsedUrl.host.lowercase()
+            if (host == "localhost" || host.startsWith("127.") || host.startsWith("192.168.") || 
+                host.startsWith("10.") || host.startsWith("172.")) {
+                Log.w(TAG, "Private/local IP addresses not allowed for API URL")
+                return false
+            }
+            
+            // Must have valid domain structure
+            if (!host.contains(".") || host.length < 4) {
+                Log.w(TAG, "Invalid domain format")
+                return false
+            }
+            
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "Invalid URL format: ${e.message}")
+            false
+        }
+    }
 
     private fun trackScreenView(call: MethodCall, result: Result) {
+        if (!isEnabled || !isInitialized) {
+            result.success(null)
+            return
+        }
+        
         coroutineScope.launch {
             try {
                 val screenName = call.argument<String>("screenName")
                 Log.d(TAG, "Tracking screen view: $screenName")
                 
-                // Store real user action
-                val action = mapOf(
-                    "id" to generateActionId(),
-                    "actionType" to "screen_view",
-                    "screenName" to (screenName ?: "unknown"),
-                    "timestamp" to System.currentTimeMillis(),
-                    "userId" to (currentUserId ?: "anonymous"),
-                    "sessionId" to getCurrentSession(),
-                    "properties" to mapOf(
-                        "device_type" to "android",
-                        "app_version" to "1.0.0"
-                    )
+                val action = UserAction(
+                    id = generateActionId(),
+                    actionType = "screen_view",
+                    screenName = screenName ?: "unknown",
+                    elementId = null,
+                    elementType = null,
+                    userId = currentUserId,
+                    sessionId = currentSessionId,
+                    timestamp = System.currentTimeMillis(),
+                    properties = mapOf(
+                        "screen_name" to (screenName ?: "unknown")
+                    ),
+                    deviceInfo = createDeviceInfo(),
+                    appVersion = "1.0.0"
                 )
-                userActions.add(action)
                 
-                actionCount++
+                userActions.add(action)
+                Log.d(TAG, "Screen view tracked and stored locally: ${action.id}")
                 result.success(null)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to track screen view", e)
@@ -130,6 +471,11 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
     }
 
     private fun trackButtonTap(call: MethodCall, result: Result) {
+        if (!isEnabled || !isInitialized) {
+            result.success(null)
+            return
+        }
+        
         coroutineScope.launch {
             try {
                 val elementId = call.argument<String>("elementId")
@@ -138,9 +484,8 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
                 val coordinatesY = call.argument<Double>("coordinatesY")
                 Log.d(TAG, "Tracking button tap: $elementId on $screenName")
                 
-                // Store real user action
-                val properties = mutableMapOf<String, Any>(
-                    "device_type" to "android",
+                val properties = mutableMapOf<String, Any?>(
+                    "element_id" to elementId,
                     "element_type" to "button"
                 )
                 if (coordinatesX != null && coordinatesY != null) {
@@ -148,19 +493,22 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
                     properties["tap_y"] = coordinatesY
                 }
                 
-                val action = mapOf(
-                    "id" to generateActionId(),
-                    "actionType" to "button_tap",
-                    "screenName" to (screenName ?: "unknown"),
-                    "elementId" to (elementId ?: "unknown"),
-                    "timestamp" to System.currentTimeMillis(),
-                    "userId" to (currentUserId ?: "anonymous"),
-                    "sessionId" to getCurrentSession(),
-                    "properties" to properties
+                val action = UserAction(
+                    id = generateActionId(),
+                    actionType = "button_tap",
+                    screenName = screenName,
+                    elementId = elementId,
+                    elementType = "button",
+                    userId = currentUserId,
+                    sessionId = currentSessionId,
+                    timestamp = System.currentTimeMillis(),
+                    properties = properties,
+                    deviceInfo = createDeviceInfo(),
+                    appVersion = "1.0.0"
                 )
-                userActions.add(action)
                 
-                actionCount++
+                userActions.add(action)
+                Log.d(TAG, "Button tap tracked and stored locally: ${action.id}")
                 result.success(null)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to track button tap", e)
@@ -174,9 +522,29 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
             try {
                 val elementId = call.argument<String>("elementId")
                 val screenName = call.argument<String>("screenName")
+                val inputLength = call.argument<Int>("inputLength")
                 Log.d(TAG, "Tracking text input: $elementId on $screenName")
                 
-                actionCount++
+                val action = UserAction(
+                    id = generateActionId(),
+                    actionType = "text_input",
+                    screenName = screenName,
+                    elementId = elementId,
+                    elementType = "input",
+                    userId = currentUserId,
+                    sessionId = currentSessionId,
+                    timestamp = System.currentTimeMillis(),
+                    properties = mapOf(
+                        "element_id" to elementId,
+                        "element_type" to "input",
+                        "input_length" to inputLength
+                    ),
+                    deviceInfo = createDeviceInfo(),
+                    appVersion = "1.0.0"
+                )
+                
+                userActions.add(action)
+                Log.d(TAG, "Text input tracked and stored locally: ${action.id}")
                 result.success(null)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to track text input", e)
@@ -190,9 +558,29 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
             try {
                 val fromScreen = call.argument<String>("fromScreen")
                 val toScreen = call.argument<String>("toScreen")
+                val method = call.argument<String>("method")
                 Log.d(TAG, "Tracking navigation: $fromScreen -> $toScreen")
                 
-                actionCount++
+                val action = UserAction(
+                    id = generateActionId(),
+                    actionType = "navigation",
+                    screenName = toScreen,
+                    elementId = null,
+                    elementType = null,
+                    userId = currentUserId,
+                    sessionId = currentSessionId,
+                    timestamp = System.currentTimeMillis(),
+                    properties = mapOf(
+                        "from_screen" to fromScreen,
+                        "to_screen" to toScreen,
+                        "navigation_method" to method
+                    ),
+                    deviceInfo = createDeviceInfo(),
+                    appVersion = "1.0.0"
+                )
+                
+                userActions.add(action)
+                Log.d(TAG, "Navigation tracked and stored locally: ${action.id}")
                 result.success(null)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to track navigation", e)
@@ -206,9 +594,28 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
             try {
                 val query = call.argument<String>("query")
                 val screenName = call.argument<String>("screenName")
+                val resultsCount = call.argument<Int>("resultsCount")
                 Log.d(TAG, "Tracking search: '$query' on $screenName")
                 
-                actionCount++
+                val action = UserAction(
+                    id = generateActionId(),
+                    actionType = "search",
+                    screenName = screenName,
+                    elementId = null,
+                    elementType = "search",
+                    userId = currentUserId,
+                    sessionId = currentSessionId,
+                    timestamp = System.currentTimeMillis(),
+                    properties = mapOf(
+                        "search_query" to query,
+                        "results_count" to resultsCount
+                    ),
+                    deviceInfo = createDeviceInfo(),
+                    appVersion = "1.0.0"
+                )
+                
+                userActions.add(action)
+                Log.d(TAG, "Search tracked and stored locally: ${action.id}")
                 result.success(null)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to track search", e)
@@ -222,9 +629,29 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
             try {
                 val eventName = call.argument<String>("eventName")
                 val screenName = call.argument<String>("screenName")
+                val elementId = call.argument<String>("elementId")
+                val properties = call.argument<Map<String, Any?>>("properties") ?: emptyMap()
                 Log.d(TAG, "Tracking custom event: '$eventName' on $screenName")
                 
-                actionCount++
+                val action = UserAction(
+                    id = generateActionId(),
+                    actionType = "custom_event",
+                    screenName = screenName,
+                    elementId = elementId,
+                    elementType = "custom",
+                    userId = currentUserId,
+                    sessionId = currentSessionId,
+                    timestamp = System.currentTimeMillis(),
+                    properties = mapOf(
+                        "event_name" to eventName,
+                        "element_id" to elementId
+                    ) + properties,
+                    deviceInfo = createDeviceInfo(),
+                    appVersion = "1.0.0"
+                )
+                
+                userActions.add(action)
+                Log.d(TAG, "Custom event tracked and stored locally: ${action.id}")
                 result.success(null)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to track custom event", e)
@@ -281,11 +708,16 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
 
     private fun getActionStatistics(result: Result) {
         try {
+            val totalActions = userActions.size
+            val syncedActions = userActions.count { it.isSynced }
+            val unsyncedActions = userActions.count { !it.isSynced }
+            val failedActions = userActions.count { it.retryCount >= 3 }
+            
             val stats = mapOf(
-                "totalActions" to actionCount,
-                "unsyncedActions" to (actionCount / 2),
-                "syncedActions" to (actionCount / 2),
-                "failedActions" to 0
+                "totalActions" to totalActions,
+                "unsyncedActions" to unsyncedActions,
+                "syncedActions" to syncedActions,
+                "failedActions" to failedActions
             )
             Log.d(TAG, "Action statistics: $stats")
             result.success(stats)
@@ -300,8 +732,29 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
             val limit = call.argument<Int>("limit") ?: 50
             Log.d(TAG, "Get unsynced actions (limit: $limit)")
             
-            // Return recent user actions (all actions are unsynced in this demo)
-            val unsyncedActions = userActions.takeLast(minOf(limit, userActions.size))
+            // Return unsynced actions, converting to maps for Flutter
+            val unsyncedActions = userActions
+                .filter { !it.isSynced }
+                .takeLast(minOf(limit, userActions.count { !it.isSynced }))
+                .map { action ->
+                    mapOf(
+                        "id" to action.id,
+                        "actionType" to action.actionType,
+                        "screenName" to action.screenName,
+                        "elementId" to action.elementId,
+                        "elementType" to action.elementType,
+                        "userId" to action.userId,
+                        "sessionId" to action.sessionId,
+                        "timestamp" to action.timestamp,
+                        "properties" to action.properties,
+                        "deviceInfo" to action.deviceInfo,
+                        "appVersion" to action.appVersion,
+                        "sdkVersion" to action.sdkVersion,
+                        "isSynced" to action.isSynced,
+                        "retryCount" to action.retryCount
+                    )
+                }
+            
             result.success(unsyncedActions)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to get unsynced actions", e)
@@ -313,6 +766,14 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
         try {
             val actionIds = call.argument<List<String>>("actionIds") ?: emptyList()
             Log.d(TAG, "Mark actions as synced: ${actionIds.size} actions")
+            
+            // Mark matching actions as synced
+            userActions.forEach { action ->
+                if (actionIds.contains(action.id)) {
+                    action.isSynced = true
+                }
+            }
+            
             result.success(true)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to mark actions as synced", e)
@@ -322,11 +783,15 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
 
     private fun getCleanupStats(result: Result) {
         try {
+            val totalActions = userActions.size
+            val syncedActions = userActions.count { it.isSynced }
+            val unsyncedActions = userActions.count { !it.isSynced }
+            
             val stats = mapOf(
-                "totalActions" to actionCount,
-                "unsyncedActions" to (actionCount / 2),
-                "syncedActions" to (actionCount / 2),
-                "estimatedSizeBytes" to (actionCount * 1024),
+                "totalActions" to totalActions,
+                "unsyncedActions" to unsyncedActions,
+                "syncedActions" to syncedActions,
+                "estimatedSizeBytes" to (totalActions * 1024),
                 "maxSizeBytes" to (50 * 1024 * 1024),
                 "retentionDays" to 30
             )
@@ -351,7 +816,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
     private fun deleteAllUserData(result: Result) {
         try {
             Log.d(TAG, "Deleting all user data")
-            actionCount = 0
+            userActions.clear()
             result.success(true)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to delete user data", e)
@@ -366,6 +831,462 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to flush operations", e)
             result.error("FLUSH_ERROR", "Failed to flush operations: ${e.message}", null)
+        }
+    }
+    
+    // ============ ENHANCED FEATURES IMPLEMENTATIONS ============
+    
+    private fun initializeEnhanced(call: MethodCall, result: Result) {
+        try {
+            val arguments = call.arguments as? Map<String, Any>
+            Log.d(TAG, "Initializing enhanced SDK")
+            
+            // Extract enhanced configuration
+            currentUserId = arguments?.get("userId") as? String
+            apiKey = arguments?.get("apiKey") as? String
+            currentDeviceId = arguments?.get("deviceId") as? String
+            sessionTimeoutMinutes = arguments?.get("sessionTimeoutMinutes") as? Int ?: 30
+            
+            // Extract privacy settings
+            val privacy = arguments?.get("privacy") as? Map<String, Any>
+            if (privacy != null) {
+                trackingEnabled = privacy["trackingEnabled"] as? Boolean ?: true
+                dataSharingEnabled = privacy["dataSharingEnabled"] as? Boolean ?: true
+            }
+            
+            // Extract global properties
+            val globalProps = arguments?.get("globalProperties") as? List<Map<String, Any>>
+            globalProps?.forEach { prop ->
+                val key = prop["key"] as? String
+                val value = prop["value"] as? String
+                if (key != null && value != null) {
+                    globalProperties[key] = value
+                }
+            }
+            
+            // Use hardcoded API endpoint
+            apiUrl = TRACKING_ENDPOINT
+            currentSessionId = generateSessionId()
+            isInitialized = true
+            startAutoFlush()
+            
+            result.success(null)
+            Log.d(TAG, "Enhanced initialization successful")
+        } catch (e: Exception) {
+            Log.e(TAG, "Enhanced initialization failed", e)
+            result.error("INITIALIZATION_ERROR", "Failed to initialize enhanced: ${e.message}", null)
+        }
+    }
+    
+    private fun trackRevenue(call: MethodCall, result: Result) {
+        if (!isEnabled || !isInitialized || allTrackingStopped) {
+            result.success(null)
+            return
+        }
+        
+        coroutineScope.launch {
+            try {
+                val arguments = call.arguments as? Map<String, Any>
+                val eventName = arguments?.get("eventName") as? String ?: "revenue"
+                val amount = arguments?.get("amount") as? Double ?: 0.0
+                val currency = arguments?.get("currency") as? String ?: "USD"
+                val properties = arguments?.get("properties") as? Map<String, Any> ?: emptyMap()
+                
+                Log.d(TAG, "Tracking revenue: $amount $currency")
+                
+                val revenueProperties = mutableMapOf<String, Any?>(
+                    "is_revenue_event" to true,
+                    "r" to amount,
+                    "pcc" to currency
+                )
+                revenueProperties.putAll(properties)
+                revenueProperties.putAll(globalProperties)
+                
+                val action = UserAction(
+                    id = generateActionId(),
+                    actionType = "revenue",
+                    screenName = null,
+                    elementId = null,
+                    elementType = "revenue",
+                    userId = currentUserId,
+                    sessionId = currentSessionId,
+                    timestamp = System.currentTimeMillis(),
+                    properties = revenueProperties,
+                    deviceInfo = createDeviceInfo(),
+                    appVersion = "1.0.0"
+                )
+                
+                userActions.add(action)
+                Log.d(TAG, "Revenue tracked and stored locally: ${action.id}")
+                result.success(null)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to track revenue", e)
+                result.error("TRACKING_ERROR", "Failed to track revenue: ${e.message}", null)
+            }
+        }
+    }
+    
+    private fun trackIOSInAppPurchase(call: MethodCall, result: Result) {
+        // Android implementation - will log but not process iOS-specific data
+        Log.d(TAG, "iOS IAP tracking called on Android - ignoring")
+        result.success(null)
+    }
+    
+    private fun trackAndroidInAppPurchase(call: MethodCall, result: Result) {
+        if (!isEnabled || !isInitialized || allTrackingStopped) {
+            result.success(null)
+            return
+        }
+        
+        coroutineScope.launch {
+            try {
+                val arguments = call.arguments as? Map<String, Any>
+                val eventName = arguments?.get("eventName") as? String ?: "android_iap"
+                val amount = arguments?.get("amount") as? Double ?: 0.0
+                val currency = arguments?.get("currency") as? String ?: "USD"
+                val productId = arguments?.get("productId") as? String
+                val purchaseToken = arguments?.get("purchaseToken") as? String
+                val signature = arguments?.get("signature") as? String
+                val purchaseData = arguments?.get("purchaseData") as? String
+                val properties = arguments?.get("properties") as? Map<String, Any> ?: emptyMap()
+                
+                Log.d(TAG, "Tracking Android IAP: $productId - $amount $currency")
+                
+                val iapProperties = mutableMapOf<String, Any?>(
+                    "is_revenue_event" to true,
+                    "r" to amount,
+                    "pcc" to currency,
+                    "platform" to "android",
+                    "product_id" to productId,
+                    "purchase_token" to purchaseToken,
+                    "receipt_signature" to signature,
+                    "receipt" to purchaseData
+                )
+                iapProperties.putAll(properties)
+                iapProperties.putAll(globalProperties)
+                
+                val action = UserAction(
+                    id = generateActionId(),
+                    actionType = "android_iap",
+                    screenName = null,
+                    elementId = productId,
+                    elementType = "iap",
+                    userId = currentUserId,
+                    sessionId = currentSessionId,
+                    timestamp = System.currentTimeMillis(),
+                    properties = iapProperties,
+                    deviceInfo = createDeviceInfo(),
+                    appVersion = "1.0.0"
+                )
+                
+                userActions.add(action)
+                Log.d(TAG, "Android IAP tracked and stored locally: ${action.id}")
+                result.success(null)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to track Android IAP", e)
+                result.error("TRACKING_ERROR", "Failed to track Android IAP: ${e.message}", null)
+            }
+        }
+    }
+    
+    private fun setGlobalProperty(call: MethodCall, result: Result) {
+        try {
+            val key = call.argument<String>("key")
+            val value = call.argument<String>("value")
+            val overrideExisting = call.argument<Boolean>("overrideExisting") ?: true
+            
+            if (key.isNullOrEmpty()) {
+                result.error("INVALID_PARAMETER", "Global property key cannot be empty", null)
+                return
+            }
+            
+            if (globalProperties.containsKey(key) && !overrideExisting) {
+                result.success(false)
+                return
+            }
+            
+            globalProperties[key] = value ?: ""
+            Log.d(TAG, "Global property set: $key")
+            result.success(true)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to set global property", e)
+            result.error("PROPERTY_ERROR", "Failed to set global property: ${e.message}", null)
+        }
+    }
+    
+    private fun unsetGlobalProperty(call: MethodCall, result: Result) {
+        try {
+            val key = call.argument<String>("key")
+            if (key.isNullOrEmpty()) {
+                result.error("INVALID_PARAMETER", "Global property key cannot be empty", null)
+                return
+            }
+            
+            globalProperties.remove(key)
+            Log.d(TAG, "Global property removed: $key")
+            result.success(null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to unset global property", e)
+            result.error("PROPERTY_ERROR", "Failed to unset global property: ${e.message}", null)
+        }
+    }
+    
+    private fun getGlobalProperties(result: Result) {
+        try {
+            Log.d(TAG, "Getting global properties: ${globalProperties.size} properties")
+            result.success(globalProperties.toMap())
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get global properties", e)
+            result.error("PROPERTY_ERROR", "Failed to get global properties: ${e.message}", null)
+        }
+    }
+    
+    private fun clearGlobalProperties(result: Result) {
+        try {
+            globalProperties.clear()
+            Log.d(TAG, "All global properties cleared")
+            result.success(null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to clear global properties", e)
+            result.error("PROPERTY_ERROR", "Failed to clear global properties: ${e.message}", null)
+        }
+    }
+    
+    private fun setTrackingEnabled(call: MethodCall, result: Result) {
+        try {
+            trackingEnabled = call.argument<Boolean>("enabled") ?: false
+            Log.d(TAG, "Tracking enabled set to: $trackingEnabled")
+            result.success(null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to set tracking enabled", e)
+            result.error("STATE_ERROR", "Failed to set tracking enabled: ${e.message}", null)
+        }
+    }
+    
+    private fun isTrackingEnabled(result: Result) {
+        try {
+            result.success(trackingEnabled)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to check tracking enabled", e)
+            result.error("STATE_ERROR", "Failed to check tracking enabled: ${e.message}", null)
+        }
+    }
+    
+    private fun setDataSharingEnabled(call: MethodCall, result: Result) {
+        try {
+            dataSharingEnabled = call.argument<Boolean>("enabled") ?: false
+            Log.d(TAG, "Data sharing enabled set to: $dataSharingEnabled")
+            result.success(null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to set data sharing enabled", e)
+            result.error("STATE_ERROR", "Failed to set data sharing enabled: ${e.message}", null)
+        }
+    }
+    
+    private fun isDataSharingEnabled(result: Result) {
+        try {
+            result.success(dataSharingEnabled)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to check data sharing enabled", e)
+            result.error("STATE_ERROR", "Failed to check data sharing enabled: ${e.message}", null)
+        }
+    }
+    
+    private fun trackingOptIn(result: Result) {
+        try {
+            trackingEnabled = true
+            dataSharingEnabled = true
+            allTrackingStopped = false
+            Log.d(TAG, "User opted into tracking")
+            result.success(null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to opt-in to tracking", e)
+            result.error("STATE_ERROR", "Failed to opt-in to tracking: ${e.message}", null)
+        }
+    }
+    
+    private fun trackingOptOut(result: Result) {
+        try {
+            trackingEnabled = false
+            dataSharingEnabled = false
+            Log.d(TAG, "User opted out of tracking")
+            result.success(null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to opt-out of tracking", e)
+            result.error("STATE_ERROR", "Failed to opt-out of tracking: ${e.message}", null)
+        }
+    }
+    
+    private fun stopAllTracking(result: Result) {
+        try {
+            allTrackingStopped = true
+            trackingEnabled = false
+            dataSharingEnabled = false
+            stopAutoFlush()
+            Log.d(TAG, "All tracking stopped")
+            result.success(null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to stop all tracking", e)
+            result.error("STATE_ERROR", "Failed to stop all tracking: ${e.message}", null)
+        }
+    }
+    
+    private fun resumeAllTracking(result: Result) {
+        try {
+            allTrackingStopped = false
+            trackingEnabled = true
+            dataSharingEnabled = true
+            if (isInitialized && !apiUrl.isNullOrBlank()) {
+                startAutoFlush()
+            }
+            Log.d(TAG, "All tracking resumed")
+            result.success(null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to resume all tracking", e)
+            result.error("STATE_ERROR", "Failed to resume all tracking: ${e.message}", null)
+        }
+    }
+    
+    private fun isAllTrackingStopped(result: Result) {
+        try {
+            result.success(allTrackingStopped)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to check if all tracking stopped", e)
+            result.error("STATE_ERROR", "Failed to check if all tracking stopped: ${e.message}", null)
+        }
+    }
+    
+    private fun setDeviceId(call: MethodCall, result: Result) {
+        try {
+            currentDeviceId = call.argument<String>("deviceId")
+            Log.d(TAG, "Device ID set")
+            result.success(null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to set device ID", e)
+            result.error("DEVICE_ERROR", "Failed to set device ID: ${e.message}", null)
+        }
+    }
+    
+    private fun unsetDeviceId(result: Result) {
+        try {
+            currentDeviceId = null
+            Log.d(TAG, "Device ID unset")
+            result.success(null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to unset device ID", e)
+            result.error("DEVICE_ERROR", "Failed to unset device ID: ${e.message}", null)
+        }
+    }
+    
+    private fun setSessionTimeout(call: MethodCall, result: Result) {
+        try {
+            sessionTimeoutMinutes = call.argument<Int>("timeoutMinutes") ?: 30
+            Log.d(TAG, "Session timeout set to: $sessionTimeoutMinutes minutes")
+            result.success(null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to set session timeout", e)
+            result.error("SESSION_ERROR", "Failed to set session timeout: ${e.message}", null)
+        }
+    }
+    
+    // ============ iOS SKAdNetwork Support (Not implemented on Android) ============
+    
+    private fun skanRegisterAppForAttribution(result: Result) {
+        Log.d(TAG, "SKAdNetwork not available on Android")
+        result.success(null)
+    }
+    
+    private fun skanUpdateConversionValue(call: MethodCall, result: Result) {
+        Log.d(TAG, "SKAdNetwork not available on Android")
+        result.success(false)
+    }
+    
+    private fun skanUpdateConversionValues(call: MethodCall, result: Result) {
+        Log.d(TAG, "SKAdNetwork not available on Android")
+        result.success(null)
+    }
+    
+    private fun skanGetConversionValue(result: Result) {
+        Log.d(TAG, "SKAdNetwork not available on Android")
+        result.success(-1)
+    }
+    
+    // ============ Push Notifications & Uninstall Tracking ============
+    
+    private fun registerDeviceTokenForUninstall(call: MethodCall, result: Result) {
+        // iOS-specific functionality
+        Log.d(TAG, "Device token registration not available on Android")
+        result.success(null)
+    }
+    
+    private fun setFCMDeviceToken(call: MethodCall, result: Result) {
+        try {
+            fcmToken = call.argument<String>("fcmToken")
+            Log.d(TAG, "FCM device token set")
+            result.success(null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to set FCM device token", e)
+            result.error("FCM_ERROR", "Failed to set FCM device token: ${e.message}", null)
+        }
+    }
+    
+    private fun handlePushNotification(call: MethodCall, result: Result) {
+        try {
+            val notificationPayload = call.argument<Map<String, Any>>("notificationPayload")
+            Log.d(TAG, "Handling push notification with payload")
+            
+            // Track push notification received
+            if (isEnabled && isInitialized && !allTrackingStopped) {
+                coroutineScope.launch {
+                    val action = UserAction(
+                        id = generateActionId(),
+                        actionType = "push_notification_received",
+                        screenName = null,
+                        elementId = null,
+                        elementType = "notification",
+                        userId = currentUserId,
+                        sessionId = currentSessionId,
+                        timestamp = System.currentTimeMillis(),
+                        properties = mapOf(
+                            "notification_payload" to notificationPayload,
+                            "platform" to "android"
+                        ) + globalProperties,
+                        deviceInfo = createDeviceInfo(),
+                        appVersion = "1.0.0"
+                    )
+                    
+                    userActions.add(action)
+                    Log.d(TAG, "Push notification tracked: ${action.id}")
+                }
+            }
+            
+            result.success(null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to handle push notification", e)
+            result.error("NOTIFICATION_ERROR", "Failed to handle push notification: ${e.message}", null)
+        }
+    }
+    
+    // ============ Advanced Configuration ============
+    
+    private fun setWrapperInfo(call: MethodCall, result: Result) {
+        try {
+            wrapperName = call.argument<String>("name")
+            wrapperVersion = call.argument<String>("version")
+            Log.d(TAG, "Wrapper info set: $wrapperName v$wrapperVersion")
+            result.success(null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to set wrapper info", e)
+            result.error("WRAPPER_ERROR", "Failed to set wrapper info: ${e.message}", null)
+        }
+    }
+    
+    private fun getSdkVersion(result: Result) {
+        try {
+            result.success(sdkVersion)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get SDK version", e)
+            result.error("VERSION_ERROR", "Failed to get SDK version: ${e.message}", null)
         }
     }
 }
