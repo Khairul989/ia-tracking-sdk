@@ -184,7 +184,8 @@ int id view_tree_on_back_pressed_dispatcher_owner 0x7f070059
 int id view_tree_saved_state_registry_owner 0x7f07005a
 int id view_tree_view_model_store_owner 0x7f07005b
 int id visible_removing_fragment_view_tag 0x7f07005c
-int integer status_bar_notification_info_maxnum 0x7f080000
+int integer google_play_services_version 0x7f080000
+int integer status_bar_notification_info_maxnum 0x7f080001
 int layout custom_dialog 0x7f090000
 int layout ime_base_split_test_activity 0x7f090001
 int layout ime_secondary_split_test_activity 0x7f090002
@@ -203,7 +204,8 @@ int string call_notification_hang_up_action 0x7f0b0004
 int string call_notification_incoming_text 0x7f0b0005
 int string call_notification_ongoing_text 0x7f0b0006
 int string call_notification_screening_text 0x7f0b0007
-int string status_bar_notification_info_overflow 0x7f0b0008
+int string common_google_play_services_unknown_issue 0x7f0b0008
+int string status_bar_notification_info_overflow 0x7f0b0009
 int style LaunchTheme 0x7f0c0000
 int style NormalTheme 0x7f0c0001
 int style TextAppearance_Compat_Notification 0x7f0c0002

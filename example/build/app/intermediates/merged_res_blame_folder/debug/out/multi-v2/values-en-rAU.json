@@ -1,7 +1,7 @@
 {
     "logs": [
         {
-            "outputFile": "com.iav3.iatracking_example.app-mergeDebugResources-24:/values-en-rAU/values-en-rAU.xml",
+            "outputFile": "com.iav3.iatracking_example.app-mergeDebugResources-25:/values-en-rAU/values-en-rAU.xml",
             "map": [
                 {
                     "source": "/Users/khairul/.gradle/caches/transforms-3/39000a30515a9efe1ea7dda343f36550/transformed/core-1.13.1/res/values-en-rAU/values-en-rAU.xml",

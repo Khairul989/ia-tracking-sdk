@@ -1,8 +1,25 @@
 {
     "logs": [
         {
-            "outputFile": "com.iav3.iatracking_example.app-mergeDebugResources-24:/values-hr/values-hr.xml",
+            "outputFile": "com.iav3.iatracking_example.app-mergeDebugResources-25:/values-hr/values-hr.xml",
             "map": [
+                {
+                    "source": "/Users/khairul/.gradle/caches/transforms-3/fe443def5956c1b536d2c8516323be71/transformed/jetified-play-services-basement-18.0.0/res/values-hr/values.xml",
+                    "from": {
+                        "startLines": "4",
+                        "startColumns": "0",
+                        "startOffsets": "195",
+                        "endColumns": "127",
+                        "endOffsets": "322"
+                    },
+                    "to": {
+                        "startLines": "9",
+                        "startColumns": "4",
+                        "startOffsets": "781",
+                        "endColumns": "131",
+                        "endOffsets": "908"
+                    }
+                },
                 {
                     "source": "/Users/khairul/.gradle/caches/transforms-3/39000a30515a9efe1ea7dda343f36550/transformed/core-1.13.1/res/values-hr/values-hr.xml",
                     "from": {
@@ -11,6 +28,13 @@
                         "startOffsets": "55,153,260,357,456,560,664,781",
                         "endColumns": "97,106,96,98,103,103,116,100",
                         "endOffsets": "148,255,352,451,555,659,776,877"
+                    },
+                    "to": {
+                        "startLines": "2,3,4,5,6,7,8,10",
+                        "startColumns": "4,4,4,4,4,4,4,4",
+                        "startOffsets": "55,153,260,357,456,560,664,913",
+                        "endColumns": "97,106,96,98,103,103,116,100",
+                        "endOffsets": "148,255,352,451,555,659,776,1009"
                     }
                 }
             ]

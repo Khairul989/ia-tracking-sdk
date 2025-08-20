@@ -1,2 +1,4 @@
 reference/
 *.md
+example/.dart_tool
+example/build

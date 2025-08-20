@@ -19,6 +19,9 @@ import java.util.*
 import java.util.concurrent.TimeUnit
 import java.security.MessageDigest
 import java.util.Base64
+import com.google.android.gms.ads.identifier.AdvertisingIdClient
+import com.google.android.gms.common.GooglePlayServicesNotAvailableException
+import com.google.android.gms.common.GooglePlayServicesRepairableException
 
 /**
  * Flutter plugin for IA Tracking Android SDK with automatic API flushing
@@ -108,12 +111,59 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
     private fun generateActionId(): String = "action_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}"
     private fun generateSessionId(): String = "session_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}"
     
-    private fun createDeviceInfo(): Map<String, Any?> = mapOf(
-        "platform" to "android",
-        "deviceModel" to android.os.Build.MODEL,
-        "osVersion" to android.os.Build.VERSION.RELEASE,
-        "manufacturer" to android.os.Build.MANUFACTURER
-    )
+    private fun createDeviceInfo(): Map<String, Any?> {
+        val deviceInfo = mutableMapOf<String, Any?>(
+            "platform" to "android",
+            "deviceModel" to android.os.Build.MODEL,
+            "osVersion" to android.os.Build.VERSION.RELEASE,
+            "manufacturer" to android.os.Build.MANUFACTURER,
+            "brand" to android.os.Build.BRAND,
+            "product" to android.os.Build.PRODUCT,
+            "hardware" to android.os.Build.HARDWARE,
+            "sdkInt" to android.os.Build.VERSION.SDK_INT,
+            "fingerprint" to android.os.Build.FINGERPRINT.take(50), // Truncate for privacy
+            "isPhysicalDevice" to !android.os.Build.FINGERPRINT.contains("generic")
+        )
+        
+        // Add GAID (Google Advertising ID) if available
+        try {
+            val adInfo = AdvertisingIdClient.getAdvertisingIdInfo(context)
+            val advertisingId = adInfo.id
+            val limitAdTracking = adInfo.isLimitAdTrackingEnabled
+            
+            if (advertisingId != null && advertisingId.isNotBlank()) {
+                deviceInfo["gaid"] = advertisingId
+                deviceInfo["limitAdTracking"] = limitAdTracking
+                Log.d(TAG, "GAID collected successfully")
+            } else {
+                deviceInfo["gaid"] = null
+                deviceInfo["limitAdTracking"] = true
+                Log.d(TAG, "GAID not available")
+            }
+        } catch (e: GooglePlayServicesNotAvailableException) {
+            Log.w(TAG, "Google Play Services not available for GAID collection", e)
+            deviceInfo["gaid"] = null
+            deviceInfo["limitAdTracking"] = true
+            deviceInfo["gaidError"] = "google_play_services_not_available"
+        } catch (e: GooglePlayServicesRepairableException) {
+            Log.w(TAG, "Google Play Services needs repair for GAID collection", e)
+            deviceInfo["gaid"] = null
+            deviceInfo["limitAdTracking"] = true
+            deviceInfo["gaidError"] = "google_play_services_repairable"
+        } catch (e: IOException) {
+            Log.w(TAG, "IOException during GAID collection", e)
+            deviceInfo["gaid"] = null
+            deviceInfo["limitAdTracking"] = true
+            deviceInfo["gaidError"] = "io_exception"
+        } catch (e: Exception) {
+            Log.e(TAG, "Unexpected error during GAID collection", e)
+            deviceInfo["gaid"] = null
+            deviceInfo["limitAdTracking"] = true
+            deviceInfo["gaidError"] = "unexpected_error"
+        }
+        
+        return deviceInfo.toMap()
+    }
     
     /**
      * Get API URL from multiple sources (priority order):
@@ -392,7 +442,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
             startAutoFlush()
             
             result.success(null)
-            Log.d(TAG, "Initialization successful - API configured: ${hashForLogging(resolvedApiUrl)}, Auto-flush started")
+            Log.d(TAG, "Initialization successful - API configured: ${hashForLogging(apiUrl ?: "")}, Auto-flush started")
         } catch (e: Exception) {
             Log.e(TAG, "Initialization failed", e)
             result.error("INITIALIZATION_ERROR", "Failed to initialize: ${e.message}", null)

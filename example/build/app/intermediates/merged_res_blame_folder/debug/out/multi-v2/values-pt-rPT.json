@@ -1,8 +1,25 @@
 {
     "logs": [
         {
-            "outputFile": "com.iav3.iatracking_example.app-mergeDebugResources-24:/values-pt-rPT/values-pt-rPT.xml",
+            "outputFile": "com.iav3.iatracking_example.app-mergeDebugResources-25:/values-pt-rPT/values-pt-rPT.xml",
             "map": [
+                {
+                    "source": "/Users/khairul/.gradle/caches/transforms-3/fe443def5956c1b536d2c8516323be71/transformed/jetified-play-services-basement-18.0.0/res/values-pt-rPT/values.xml",
+                    "from": {
+                        "startLines": "4",
+                        "startColumns": "0",
+                        "startOffsets": "199",
+                        "endColumns": "140",
+                        "endOffsets": "339"
+                    },
+                    "to": {
+                        "startLines": "9",
+                        "startColumns": "4",
+                        "startOffsets": "787",
+                        "endColumns": "144",
+                        "endOffsets": "927"
+                    }
+                },
                 {
                     "source": "/Users/khairul/.gradle/caches/transforms-3/39000a30515a9efe1ea7dda343f36550/transformed/core-1.13.1/res/values-pt-rPT/values-pt-rPT.xml",
                     "from": {
@@ -11,6 +28,13 @@
                         "startOffsets": "55,152,254,353,453,560,666,787",
                         "endColumns": "96,101,98,99,106,105,120,100",
                         "endOffsets": "147,249,348,448,555,661,782,883"
+                    },
+                    "to": {
+                        "startLines": "2,3,4,5,6,7,8,10",
+                        "startColumns": "4,4,4,4,4,4,4,4",
+                        "startOffsets": "55,152,254,353,453,560,666,932",
+                        "endColumns": "96,101,98,99,106,105,120,100",
+                        "endOffsets": "147,249,348,448,555,661,782,1028"
                     }
                 }
             ]
