@@ -3,6 +3,7 @@ class TrackingConfiguration {
   /// Create a tracking configuration
   const TrackingConfiguration({
     this.userId,
+    this.appId,
     this.appVersion,
     this.maxDatabaseSize = 50 * 1024 * 1024, // 50MB
     this.maxRetentionDays = 30,
@@ -17,6 +18,7 @@ class TrackingConfiguration {
   factory TrackingConfiguration.fromMap(Map<String, dynamic> map) {
     return TrackingConfiguration(
       userId: map['userId'],
+      appId: map['appId'],
       appVersion: map['appVersion'],
       maxDatabaseSize: map['maxDatabaseSize'] ?? 50 * 1024 * 1024,
       maxRetentionDays: map['maxRetentionDays'] ?? 30,
@@ -30,6 +32,9 @@ class TrackingConfiguration {
 
   /// User identifier (optional)
   final String? userId;
+
+  /// Application identifier (optional)
+  final String? appId;
 
   /// Application version
   final String? appVersion;
@@ -58,6 +63,7 @@ class TrackingConfiguration {
   /// Create a copy of this configuration with updated values
   TrackingConfiguration copyWith({
     String? userId,
+    String? appId,
     String? appVersion,
     int? maxDatabaseSize,
     int? maxRetentionDays,
@@ -69,6 +75,7 @@ class TrackingConfiguration {
   }) {
     return TrackingConfiguration(
       userId: userId ?? this.userId,
+      appId: appId ?? this.appId,
       appVersion: appVersion ?? this.appVersion,
       maxDatabaseSize: maxDatabaseSize ?? this.maxDatabaseSize,
       maxRetentionDays: maxRetentionDays ?? this.maxRetentionDays,
@@ -85,6 +92,7 @@ class TrackingConfiguration {
   Map<String, dynamic> toMap() {
     return {
       'userId': userId,
+      'appId': appId,
       'appVersion': appVersion,
       'maxDatabaseSize': maxDatabaseSize,
       'maxRetentionDays': maxRetentionDays,
@@ -100,6 +108,7 @@ class TrackingConfiguration {
   String toString() {
     return 'TrackingConfiguration('
         'userId: $userId, '
+        'appId: $appId, '
         'appVersion: $appVersion, '
         'maxDatabaseSize: $maxDatabaseSize, '
         'maxRetentionDays: $maxRetentionDays, '
@@ -115,6 +124,7 @@ class TrackingConfiguration {
       other is TrackingConfiguration &&
           runtimeType == other.runtimeType &&
           userId == other.userId &&
+          appId == other.appId &&
           appVersion == other.appVersion &&
           maxDatabaseSize == other.maxDatabaseSize &&
           maxRetentionDays == other.maxRetentionDays &&
@@ -127,6 +137,7 @@ class TrackingConfiguration {
   @override
   int get hashCode =>
       userId.hashCode ^
+      appId.hashCode ^
       appVersion.hashCode ^
       maxDatabaseSize.hashCode ^
       maxRetentionDays.hashCode ^
