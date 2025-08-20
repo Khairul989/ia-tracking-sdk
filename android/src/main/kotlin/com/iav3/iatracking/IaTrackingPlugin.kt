@@ -72,6 +72,11 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
     private var fcmToken: String? = null
     private val globalProperties = mutableMapOf<String, String>()
     
+    // GAID caching
+    private var cachedGaid: String? = null
+    private var cachedLimitAdTracking: Boolean? = null
+    private var gaidCollectionAttempted = false
+    
     // SDK info
     private var wrapperName: String? = null
     private var wrapperVersion: String? = null
@@ -111,6 +116,46 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
     private fun generateActionId(): String = "action_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}"
     private fun generateSessionId(): String = "session_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}"
     
+    /**
+     * Collect GAID asynchronously on background thread (called once during initialization)
+     */
+    private fun collectGaidAsync() {
+        if (gaidCollectionAttempted) return
+        
+        gaidCollectionAttempted = true
+        
+        // Run on background thread to avoid blocking main thread
+        coroutineScope.launch(Dispatchers.IO) {
+            try {
+                val adInfo = AdvertisingIdClient.getAdvertisingIdInfo(context)
+                val advertisingId = adInfo.id
+                val limitAdTracking = adInfo.isLimitAdTrackingEnabled
+                
+                // Cache the results
+                cachedGaid = if (advertisingId.isNullOrBlank()) null else advertisingId
+                cachedLimitAdTracking = limitAdTracking
+                
+                Log.d(TAG, "GAID collected successfully and cached")
+            } catch (e: GooglePlayServicesNotAvailableException) {
+                Log.w(TAG, "Google Play Services not available for GAID collection", e)
+                cachedGaid = null
+                cachedLimitAdTracking = true
+            } catch (e: GooglePlayServicesRepairableException) {
+                Log.w(TAG, "Google Play Services needs repair for GAID collection", e)
+                cachedGaid = null
+                cachedLimitAdTracking = true
+            } catch (e: IOException) {
+                Log.w(TAG, "IOException during GAID collection", e)
+                cachedGaid = null
+                cachedLimitAdTracking = true
+            } catch (e: Exception) {
+                Log.e(TAG, "Unexpected error during GAID collection", e)
+                cachedGaid = null
+                cachedLimitAdTracking = true
+            }
+        }
+    }
+    
     private fun createDeviceInfo(): Map<String, Any?> {
         val deviceInfo = mutableMapOf<String, Any?>(
             "platform" to "android",
@@ -125,41 +170,19 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
             "isPhysicalDevice" to !android.os.Build.FINGERPRINT.contains("generic")
         )
         
-        // Add GAID (Google Advertising ID) if available
-        try {
-            val adInfo = AdvertisingIdClient.getAdvertisingIdInfo(context)
-            val advertisingId = adInfo.id
-            val limitAdTracking = adInfo.isLimitAdTrackingEnabled
+        // Add cached GAID if available
+        if (gaidCollectionAttempted) {
+            deviceInfo["gaid"] = cachedGaid
+            deviceInfo["limitAdTracking"] = cachedLimitAdTracking ?: true
             
-            if (advertisingId != null && advertisingId.isNotBlank()) {
-                deviceInfo["gaid"] = advertisingId
-                deviceInfo["limitAdTracking"] = limitAdTracking
-                Log.d(TAG, "GAID collected successfully")
-            } else {
-                deviceInfo["gaid"] = null
-                deviceInfo["limitAdTracking"] = true
-                Log.d(TAG, "GAID not available")
+            if (cachedGaid != null) {
+                Log.d(TAG, "Using cached GAID in device info")
             }
-        } catch (e: GooglePlayServicesNotAvailableException) {
-            Log.w(TAG, "Google Play Services not available for GAID collection", e)
+        } else {
+            // GAID collection not yet attempted or completed
             deviceInfo["gaid"] = null
             deviceInfo["limitAdTracking"] = true
-            deviceInfo["gaidError"] = "google_play_services_not_available"
-        } catch (e: GooglePlayServicesRepairableException) {
-            Log.w(TAG, "Google Play Services needs repair for GAID collection", e)
-            deviceInfo["gaid"] = null
-            deviceInfo["limitAdTracking"] = true
-            deviceInfo["gaidError"] = "google_play_services_repairable"
-        } catch (e: IOException) {
-            Log.w(TAG, "IOException during GAID collection", e)
-            deviceInfo["gaid"] = null
-            deviceInfo["limitAdTracking"] = true
-            deviceInfo["gaidError"] = "io_exception"
-        } catch (e: Exception) {
-            Log.e(TAG, "Unexpected error during GAID collection", e)
-            deviceInfo["gaid"] = null
-            deviceInfo["limitAdTracking"] = true
-            deviceInfo["gaidError"] = "unexpected_error"
+            Log.d(TAG, "GAID not yet collected - using null")
         }
         
         return deviceInfo.toMap()
@@ -215,7 +238,11 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
         channel = MethodChannel(flutterPluginBinding.binaryMessenger, CHANNEL_NAME)
         channel.setMethodCallHandler(this)
         context = flutterPluginBinding.applicationContext
-        Log.d(TAG, "Plugin attached to engine")
+        
+        // Start GAID collection as soon as we have context
+        collectGaidAsync()
+        
+        Log.d(TAG, "Plugin attached to engine - GAID collection started")
     }
 
     override fun onMethodCall(@NonNull call: MethodCall, @NonNull result: Result) {
