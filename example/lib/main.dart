@@ -80,12 +80,14 @@ class _MyHomePageState extends State<MyHomePage> {
         maxRetentionDays: 30,
         sessionTimeoutMinutes: 30,
         batchSize: 50,
-        serverUrl: 'https://api.example.com/tracking',
-        apiKey: 'demo_api_key_12345',
+        serverUrl: 'https://sorted-berlin-pf-onto.trycloudflare.com/v1/track',
+        apiKey: 'demo-api-key-12345',
         debugMode: true,
       );
 
-      debugPrint('📋 Configuration created, calling initialize...');
+      debugPrint('📋 Configuration created with server URL: ${config.serverUrl}');
+      debugPrint('📋 API Key: ${config.apiKey}');
+      debugPrint('📋 Calling initialize...');
 
       // Add timeout to prevent hanging on splash screen
       // Use a longer timeout for IDE debugging scenarios
@@ -96,6 +98,7 @@ class _MyHomePageState extends State<MyHomePage> {
       await IaTracker.instance.initialize(config).timeout(timeout);
 
       debugPrint('✅ SDK initialization completed successfully');
+      debugPrint('✅ Server URL configured: ${config.serverUrl}');
 
       setState(() {
         _isInitialized = true;
@@ -154,16 +157,22 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _trackButtonTap() async {
-    if (!_isInitialized) return;
+    if (!_isInitialized) {
+      debugPrint('⚠️ SDK not initialized, skipping button tap tracking');
+      return;
+    }
 
     try {
+      debugPrint('🔄 Tracking button tap...');
       await IaTracker.instance.trackButtonTap(
         'increment_button',
         'HomeScreen',
         coordinates: const Offset(200, 400), // Example coordinates
       );
+      debugPrint('✅ Button tap tracked successfully');
       _updateStatus('Button tap tracked successfully');
     } catch (e) {
+      debugPrint('❌ Failed to track button tap: $e');
       _updateStatus('Failed to track button tap: $e');
     }
   }
@@ -214,9 +223,20 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _flushData() async {
     try {
+      debugPrint('🔄 Manually flushing data...');
       await IaTracker.instance.flush();
+      debugPrint('✅ Data flushed successfully');
       _updateStatus('Data flushed successfully');
+      
+      // Also get statistics to see what was flushed
+      try {
+        final stats = await IaTracker.instance.getActionStatistics();
+        debugPrint('📊 Statistics after flush: $stats');
+      } catch (statsError) {
+        debugPrint('⚠️ Could not get stats after flush: $statsError');
+      }
     } catch (e) {
+      debugPrint('❌ Failed to flush data: $e');
       _updateStatus('Failed to flush data: $e');
     }
   }

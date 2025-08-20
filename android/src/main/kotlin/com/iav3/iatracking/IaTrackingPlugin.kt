@@ -380,20 +380,25 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
     private fun flushUnsyncedActions() {
         coroutineScope.launch {
             try {
+                Log.d(TAG, "Auto-flush triggered - Status: enabled=$isEnabled, initialized=$isInitialized, apiUrl=${if (apiUrl.isNullOrBlank()) "null/blank" else "configured"}")
+                
                 // Skip if no API URL configured
                 if (apiUrl.isNullOrBlank()) {
-                    Log.d(TAG, "No API URL configured, skipping auto-flush")
+                    Log.w(TAG, "No API URL configured, skipping auto-flush")
                     return@launch
                 }
                 
+                val totalActions = userActions.size
                 val unsyncedActions = userActions.filter { !it.isSynced && it.retryCount < 3 }
+                
+                Log.d(TAG, "Action summary: total=$totalActions, unsynced=${unsyncedActions.size}")
                 
                 if (unsyncedActions.isEmpty()) {
                     Log.d(TAG, "No unsynced actions to flush")
                     return@launch
                 }
                 
-                Log.d(TAG, "Flushing ${unsyncedActions.size} unsynced actions to API")
+                Log.i(TAG, "Flushing ${unsyncedActions.size} unsynced actions to API: $apiUrl")
                 
                 // Send actions to API
                 val success = sendActionsToApi(unsyncedActions)
@@ -651,7 +656,10 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
     }
 
     private fun trackButtonTap(call: MethodCall, result: Result) {
+        Log.d(TAG, "trackButtonTap called - enabled=$isEnabled, initialized=$isInitialized")
+        
         if (!isEnabled || !isInitialized) {
+            Log.w(TAG, "Skipping button tap tracking - not enabled or not initialized")
             result.success(null)
             return
         }
@@ -662,7 +670,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
                 val screenName = call.argument<String>("screenName")
                 val coordinatesX = call.argument<Double>("coordinatesX")
                 val coordinatesY = call.argument<Double>("coordinatesY")
-                Log.d(TAG, "Tracking button tap: $elementId on $screenName")
+                Log.i(TAG, "Tracking button tap: $elementId on $screenName")
                 
                 val properties = mutableMapOf<String, Any?>(
                     "element_id" to elementId,
@@ -688,7 +696,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
                 )
                 
                 userActions.add(action)
-                Log.d(TAG, "Button tap tracked and stored locally: ${action.id}")
+                Log.i(TAG, "Button tap tracked and stored locally: ${action.id} (Total actions: ${userActions.size})")
                 result.success(null)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to track button tap", e)
