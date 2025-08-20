@@ -24,6 +24,9 @@ IA Tracking SDKs for comprehensive user action tracking in Flutter applications.
   # Optional: If you have a separate native iOS SDK
   # s.dependency 'IATrackingCore', '~> 1.0.0'
   
+  # Required iOS frameworks for IDFA and App Tracking Transparency
+  s.frameworks = 'AdSupport', 'AppTrackingTransparency', 'StoreKit'
+  
   s.platform = :ios, '12.0'
 
   # Flutter.framework does not contain a i386 slice

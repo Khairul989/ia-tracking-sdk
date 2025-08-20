@@ -335,6 +335,53 @@ abstract class IaTracker extends PlatformInterface {
 
   /// Get SDK version
   Future<String> getSdkVersion();
+
+  // ============ iOS App Tracking Transparency (ATT) Support ============
+
+  /// Request App Tracking Transparency permission (iOS only)
+  ///
+  /// This method requests permission to track the user across apps and websites.
+  /// On iOS 14.5+, this will show the ATT permission dialog to the user.
+  /// On older iOS versions, this will use the LAT (Limit Ad Tracking) setting.
+  /// On Android, this method will complete successfully but has no effect.
+  ///
+  /// Should be called before attempting to collect IDFA.
+  Future<void> requestTrackingPermission();
+
+  /// Get current App Tracking Transparency authorization status (iOS only)
+  ///
+  /// Returns the current ATT authorization status:
+  /// - "authorized": User has granted permission
+  /// - "denied": User has denied permission  
+  /// - "restricted": Permission is restricted (e.g., parental controls)
+  /// - "notDetermined": User hasn't been asked yet
+  /// - "unknown": Unable to determine status
+  ///
+  /// On Android, always returns "authorized".
+  Future<String> getTrackingAuthorizationStatus();
+
+  /// Check if tracking is authorized (iOS only)
+  ///
+  /// Returns true if the user has authorized tracking, false otherwise.
+  /// This is a convenience method that checks if getTrackingAuthorizationStatus()
+  /// returns "authorized".
+  ///
+  /// On Android, always returns true.
+  Future<bool> isTrackingAuthorized();
+
+  /// Get IDFA if available (iOS only, for debugging/testing)
+  ///
+  /// Returns the current IDFA (Identifier for Advertisers) if available.
+  /// Returns null if:
+  /// - ATT permission is not granted
+  /// - IDFA is not available (e.g., simulator)
+  /// - User has limited ad tracking
+  ///
+  /// On Android, always returns null.
+  ///
+  /// Note: This method is primarily intended for debugging and testing.
+  /// The IDFA is automatically included in tracking events when available.
+  Future<String?> getIDFA();
 }
 
 /// Default implementation of [IaTracker] using method channels
@@ -1050,6 +1097,47 @@ class _IaTrackerImpl extends IaTracker {
       return result ?? 'unknown';
     } on flutter_services.PlatformException catch (e) {
       throw PlatformException('Failed to get SDK version: ${e.message}');
+    }
+  }
+
+  // ============ iOS App Tracking Transparency (ATT) Support ============
+
+  @override
+  Future<void> requestTrackingPermission() async {
+    try {
+      await _channel.invokeMethod('requestTrackingPermission');
+    } on flutter_services.PlatformException catch (e) {
+      throw PlatformException('Failed to request tracking permission: ${e.message}');
+    }
+  }
+
+  @override
+  Future<String> getTrackingAuthorizationStatus() async {
+    try {
+      final result = await _channel.invokeMethod<String>('getTrackingAuthorizationStatus');
+      return result ?? 'unknown';
+    } on flutter_services.PlatformException catch (e) {
+      throw PlatformException('Failed to get tracking authorization status: ${e.message}');
+    }
+  }
+
+  @override
+  Future<bool> isTrackingAuthorized() async {
+    try {
+      final result = await _channel.invokeMethod<bool>('isTrackingAuthorized');
+      return result ?? false;
+    } on flutter_services.PlatformException catch (e) {
+      throw PlatformException('Failed to check if tracking is authorized: ${e.message}');
+    }
+  }
+
+  @override
+  Future<String?> getIDFA() async {
+    try {
+      final result = await _channel.invokeMethod<String>('getIDFA');
+      return result;
+    } on flutter_services.PlatformException catch (e) {
+      throw PlatformException('Failed to get IDFA: ${e.message}');
     }
   }
 }

@@ -47,6 +47,10 @@ class _MyHomePageState extends State<MyHomePage> {
   String _statusMessage = 'Initializing...';
   bool _isInitialized = false;
 
+  // ATT (App Tracking Transparency) state
+  String _attStatus = 'unknown';
+  String? _idfa;
+
   @override
   void initState() {
     super.initState();
@@ -85,7 +89,8 @@ class _MyHomePageState extends State<MyHomePage> {
         debugMode: true,
       );
 
-      debugPrint('📋 Configuration created with server URL: ${config.serverUrl}');
+      debugPrint(
+          '📋 Configuration created with server URL: ${config.serverUrl}');
       debugPrint('📋 API Key: ${config.apiKey}');
       debugPrint('📋 Calling initialize...');
 
@@ -110,6 +115,7 @@ class _MyHomePageState extends State<MyHomePage> {
       try {
         await _trackScreenView();
         await _checkTrackingStatus();
+        await _checkATTStatus(); // Check ATT status after initialization
         debugPrint('📱 Initial tracking calls completed');
       } catch (trackingError) {
         debugPrint('⚠️ Initial tracking calls failed: $trackingError');
@@ -227,7 +233,7 @@ class _MyHomePageState extends State<MyHomePage> {
       await IaTracker.instance.flush();
       debugPrint('✅ Data flushed successfully');
       _updateStatus('Data flushed successfully');
-      
+
       // Also get statistics to see what was flushed
       try {
         final stats = await IaTracker.instance.getActionStatistics();
@@ -254,6 +260,136 @@ class _MyHomePageState extends State<MyHomePage> {
         });
       }
     });
+  }
+
+  // ATT (App Tracking Transparency) methods
+  Future<void> _checkATTStatus() async {
+    if (!_isInitialized) return;
+
+    try {
+      final status = await IaTracker.instance.getTrackingAuthorizationStatus();
+      final idfa = await IaTracker.instance.getIDFA();
+
+      setState(() {
+        _attStatus = status;
+        _idfa = idfa;
+      });
+
+      debugPrint('📱 ATT Status: $status, IDFA: ${idfa ?? 'null'}');
+    } catch (e) {
+      debugPrint('❌ Failed to check ATT status: $e');
+      _updateStatus('Failed to check ATT status: $e');
+    }
+  }
+
+  Future<void> _requestATTPermission() async {
+    if (!_isInitialized) {
+      _updateStatus('SDK not initialized');
+      return;
+    }
+
+    try {
+      debugPrint('🔐 Requesting ATT permission...');
+      _updateStatus('Requesting tracking permission...');
+
+      await IaTracker.instance.requestTrackingPermission();
+
+      // Check status after permission request
+      await _checkATTStatus();
+
+      final authorized = await IaTracker.instance.isTrackingAuthorized();
+      if (authorized) {
+        _updateStatus('Tracking permission granted');
+        debugPrint('✅ Tracking permission granted');
+      } else {
+        _updateStatus('Tracking permission denied');
+        debugPrint('❌ Tracking permission denied');
+      }
+    } catch (e) {
+      debugPrint('❌ Failed to request ATT permission: $e');
+      _updateStatus('Failed to request tracking permission: $e');
+    }
+  }
+
+  Future<void> _showATTInfo() async {
+    await _checkATTStatus();
+
+    if (mounted) {
+      showDialog(
+        context: context,
+        builder: (BuildContext context) {
+          return AlertDialog(
+            title: const Text('App Tracking Transparency'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Status: $_attStatus'),
+                const SizedBox(height: 8),
+                Text('IDFA: ${_idfa ?? 'Not available'}'),
+                const SizedBox(height: 16),
+                const Text(
+                  'This information is automatically included in tracking events when available.',
+                  style: TextStyle(fontSize: 12),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          );
+        },
+      );
+    }
+  }
+
+  // Helper methods for ATT status display
+  IconData _getATTStatusIcon() {
+    switch (_attStatus) {
+      case 'authorized':
+        return Icons.verified_user;
+      case 'denied':
+        return Icons.block;
+      case 'restricted':
+        return Icons.warning;
+      case 'notDetermined':
+        return Icons.help_outline;
+      default:
+        return Icons.help_outline;
+    }
+  }
+
+  Color _getATTStatusColor() {
+    switch (_attStatus) {
+      case 'authorized':
+        return Colors.green;
+      case 'denied':
+        return Colors.red;
+      case 'restricted':
+        return Colors.orange;
+      case 'notDetermined':
+        return Colors.grey;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  String _getATTDisplayStatus() {
+    switch (_attStatus) {
+      case 'authorized':
+        return 'Authorized';
+      case 'denied':
+        return 'Denied';
+      case 'restricted':
+        return 'Restricted';
+      case 'notDetermined':
+        return 'Not Asked';
+      default:
+        return 'Unknown';
+    }
   }
 
   void _navigateToSettings() {
@@ -325,6 +461,23 @@ class _MyHomePageState extends State<MyHomePage> {
                           Text(_isTrackingEnabled ? 'Enabled' : 'Disabled'),
                         ],
                       ),
+                      const SizedBox(height: 16),
+                      // ATT Status Row
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            _getATTStatusIcon(),
+                            color: _getATTStatusColor(),
+                            size: 16,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            'ATT: ${_getATTDisplayStatus()}',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
                       const SizedBox(height: 8),
                       Text(
                         _statusMessage,
@@ -373,6 +526,16 @@ class _MyHomePageState extends State<MyHomePage> {
                     onPressed: _showDeviceInfo,
                     icon: const Icon(Icons.phone_android),
                     label: const Text('Device Info'),
+                  ),
+                  ElevatedButton.icon(
+                    onPressed: _requestATTPermission,
+                    icon: const Icon(Icons.security),
+                    label: const Text('Request ATT'),
+                  ),
+                  ElevatedButton.icon(
+                    onPressed: _showATTInfo,
+                    icon: const Icon(Icons.info),
+                    label: const Text('ATT Status'),
                   ),
                 ],
               ),

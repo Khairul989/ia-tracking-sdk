@@ -45,5 +45,7 @@
     <true/>
     <key>UIApplicationSupportsIndirectInputEvents</key>
     <true/>
+    <key>NSUserTrackingUsageDescription</key>
+    <string>This app uses tracking to provide personalized analytics and improve user experience. Your tracking preferences can be changed at any time in Settings.</string>
 </dict>
 </plist>

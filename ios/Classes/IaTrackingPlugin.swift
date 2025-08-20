@@ -60,6 +60,11 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
     private var skanEnabled = true
     private var conversionValue: Int = 0
     
+    // IDFA and ATT (App Tracking Transparency) state
+    private var cachedIDFA: String?
+    private var cachedATTStatus: ATTrackingManager.AuthorizationStatus?
+    private var idfaCollectionAttempted = false
+    
     // Data structure for user actions
     struct UserAction: Codable {
         let id: String
@@ -216,6 +221,16 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
         case "getSdkVersion":
             getSdkVersion(result: result)
             
+        // iOS App Tracking Transparency (ATT) methods
+        case "requestTrackingPermission":
+            requestTrackingPermission(result: result)
+        case "getTrackingAuthorizationStatus":
+            getTrackingAuthorizationStatus(result: result)
+        case "isTrackingAuthorized":
+            isTrackingAuthorized(result: result)
+        case "getIDFA":
+            getIDFA(result: result)
+            
         default:
             result(FlutterMethodNotImplemented)
         }
@@ -236,7 +251,7 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
     }
     
     private func createDeviceInfo() -> [String: Any] {
-        return [
+        var deviceInfo: [String: Any] = [
             "platform": "iOS",
             "osVersion": UIDevice.current.systemVersion,
             "appVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0",
@@ -247,6 +262,25 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
             "connection": getConnectionType(),
             "manufacturer": "Apple"
         ]
+        
+        // Add cached IDFA if collection has been attempted
+        if idfaCollectionAttempted {
+            deviceInfo["idfa"] = cachedIDFA
+            deviceInfo["attStatus"] = attStatusToString(cachedATTStatus)
+            
+            if cachedIDFA != nil {
+                os_log("Using cached IDFA in device info", log: Self.logger, type: .debug)
+            } else {
+                os_log("IDFA not available - using nil", log: Self.logger, type: .debug)
+            }
+        } else {
+            // IDFA collection not yet attempted or completed
+            deviceInfo["idfa"] = nil
+            deviceInfo["attStatus"] = "notDetermined"
+            os_log("IDFA not yet collected - using nil", log: Self.logger, type: .debug)
+        }
+        
+        return deviceInfo
     }
     
     private func getCarrierName() -> String {
@@ -257,6 +291,28 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
     private func getConnectionType() -> String {
         // Basic connection type detection
         return "unknown"
+    }
+    
+    private func attStatusToString(_ status: ATTrackingManager.AuthorizationStatus?) -> String {
+        if #available(iOS 14.5, *) {
+            guard let status = status else { return "unknown" }
+            
+            switch status {
+            case .authorized:
+                return "authorized"
+            case .denied:
+                return "denied"
+            case .restricted:
+                return "restricted"
+            case .notDetermined:
+                return "notDetermined"
+            @unknown default:
+                return "unknown"
+            }
+        } else {
+            // For iOS < 14.5, return simplified status based on LAT setting
+            return status == .authorized ? "authorized" : "denied"
+        }
     }
     
     private func resolveApiUrl(configServerUrl: String?) -> String? {
@@ -283,6 +339,65 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
         }
         
         return nil
+    }
+    
+    /**
+     * Collect IDFA asynchronously on background thread (called once during initialization)
+     */
+    private func collectIDFAAsync() {
+        if idfaCollectionAttempted { return }
+        
+        idfaCollectionAttempted = true
+        os_log("Starting IDFA collection", log: Self.logger, type: .info)
+        
+        DispatchQueue.global(qos: .background).async { [weak self] in
+            guard let self = self else { return }
+            
+            // Check iOS version compatibility
+            if #available(iOS 14.5, *) {
+                // iOS 14.5+ with App Tracking Transparency
+                let currentStatus = ATTrackingManager.trackingAuthorizationStatus
+                self.cachedATTStatus = currentStatus
+                
+                switch currentStatus {
+                case .authorized:
+                    // User has granted permission, collect IDFA
+                    let idfa = ASIdentifierManager.shared().advertisingIdentifier.uuidString
+                    self.cachedIDFA = idfa == "00000000-0000-0000-0000-000000000000" ? nil : idfa
+                    os_log("IDFA collected successfully with ATT authorization: %@", log: Self.logger, type: .info, self.cachedIDFA ?? "nil")
+                    
+                case .denied, .restricted:
+                    // User denied or restricted, cannot collect IDFA
+                    self.cachedIDFA = nil
+                    os_log("IDFA collection denied/restricted by ATT status: %@", log: Self.logger, type: .info, String(describing: currentStatus))
+                    
+                case .notDetermined:
+                    // User hasn't been asked yet, IDFA not available without permission
+                    self.cachedIDFA = nil
+                    os_log("ATT permission not determined, IDFA not collected", log: Self.logger, type: .info)
+                    
+                @unknown default:
+                    // Future ATT status values
+                    self.cachedIDFA = nil
+                    os_log("Unknown ATT status, IDFA not collected", log: Self.logger, type: .warning)
+                }
+            } else {
+                // iOS < 14.5, no ATT required
+                let idfa = ASIdentifierManager.shared().advertisingIdentifier.uuidString
+                let isLimitAdTrackingEnabled = ASIdentifierManager.shared().isAdvertisingTrackingEnabled
+                
+                if isLimitAdTrackingEnabled {
+                    self.cachedIDFA = idfa == "00000000-0000-0000-0000-000000000000" ? nil : idfa
+                    os_log("IDFA collected successfully on iOS <14.5: %@", log: Self.logger, type: .info, self.cachedIDFA ?? "nil")
+                } else {
+                    self.cachedIDFA = nil
+                    os_log("IDFA collection disabled by LAT setting on iOS <14.5", log: Self.logger, type: .info)
+                }
+                
+                // Set a compatible ATT status for older iOS versions
+                self.cachedATTStatus = isLimitAdTrackingEnabled ? .authorized : .denied
+            }
+        }
     }
     
     private func startAutoFlush() {
@@ -513,6 +628,9 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
             
             // Mark as initialized
             self.isInitialized = true
+            
+            // Start IDFA collection as soon as we're initialized
+            self.collectIDFAAsync()
             
             // Start auto-flush timer
             DispatchQueue.main.async {
@@ -1607,5 +1725,57 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
     
     private func getSdkVersion(result: @escaping FlutterResult) {
         result(sdkVersion)
+    }
+    
+    // MARK: - iOS App Tracking Transparency (ATT) Support
+    
+    private func requestTrackingPermission(result: @escaping FlutterResult) {
+        if #available(iOS 14.5, *) {
+            ATTrackingManager.requestTrackingAuthorization { [weak self] status in
+                guard let self = self else {
+                    DispatchQueue.main.async { result(nil) }
+                    return
+                }
+                
+                // Update cached status
+                self.cachedATTStatus = status
+                
+                // Re-collect IDFA now that permission may have changed
+                if status == .authorized {
+                    let idfa = ASIdentifierManager.shared().advertisingIdentifier.uuidString
+                    self.cachedIDFA = idfa == "00000000-0000-0000-0000-000000000000" ? nil : idfa
+                    os_log("IDFA re-collected after ATT permission granted: %@", log: Self.logger, type: .info, self.cachedIDFA ?? "nil")
+                } else {
+                    self.cachedIDFA = nil
+                    os_log("IDFA cleared after ATT permission denied/restricted", log: Self.logger, type: .info)
+                }
+                
+                DispatchQueue.main.async {
+                    result(nil)
+                    os_log("ATT permission request completed with status: %@", log: Self.logger, type: .info, self.attStatusToString(status))
+                }
+            }
+        } else {
+            // iOS < 14.5, no ATT available
+            os_log("ATT not available on iOS < 14.5, request completed successfully", log: Self.logger, type: .info)
+            result(nil)
+        }
+    }
+    
+    private func getTrackingAuthorizationStatus(result: @escaping FlutterResult) {
+        let statusString = attStatusToString(cachedATTStatus)
+        os_log("Current ATT authorization status: %@", log: Self.logger, type: .debug, statusString)
+        result(statusString)
+    }
+    
+    private func isTrackingAuthorized(result: @escaping FlutterResult) {
+        let isAuthorized = cachedATTStatus == .authorized
+        os_log("Is tracking authorized: %@", log: Self.logger, type: .debug, String(isAuthorized))
+        result(isAuthorized)
+    }
+    
+    private func getIDFA(result: @escaping FlutterResult) {
+        os_log("Returning cached IDFA: %@", log: Self.logger, type: .debug, cachedIDFA ?? "nil")
+        result(cachedIDFA)
     }
 }
