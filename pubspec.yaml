@@ -1,0 +1,50 @@
+name: ia_tracking
+description: IA Tracking Flutter SDK - Cross-platform user action tracking with native Android and iOS integration
+version: 1.0.0
+homepage: https://github.com/iav3/ia-tracking-flutter-sdk
+repository: https://github.com/iav3/ia-tracking-flutter-sdk
+issue_tracker: https://github.com/iav3/ia-tracking-flutter-sdk/issues
+documentation: https://docs.iav3.com/flutter-sdk
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: '>=3.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  plugin_platform_interface: ^2.1.7
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.1
+  mockito: ^5.4.4
+  build_runner: ^2.4.7
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.iav3.iatracking
+        pluginClass: IaTrackingPlugin
+      ios:
+        pluginClass: IaTrackingPlugin
+
+topics:
+  - analytics
+  - tracking
+  - user-behavior
+  - cross-platform
+  - native
+
+funding:
+  - https://github.com/sponsors/iav3
+
+# screenshots:
+#   - description: 'Flutter SDK Integration Example'
+#     path: screenshots/flutter_integration.png
+
+maintainers:
+  - name: 'IAv3 Team'
+    email: 'flutter-support@iav3.com'

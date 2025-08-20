@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.iav3.iatracking" > <!-- No specific permissions required for basic tracking functionality -->
+    <uses-sdk android:minSdkVersion="21" />
+
+</manifest>

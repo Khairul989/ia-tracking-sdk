@@ -1,0 +1,56 @@
+group 'com.iav3.iatracking'
+version '1.0.0'
+
+buildscript {
+    ext.kotlin_version = '1.8.21'
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    dependencies {
+        classpath 'com.android.tools.build:gradle:7.4.2'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+
+rootProject.allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+
+android {
+    namespace 'com.iav3.iatracking'
+    compileSdkVersion 34
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+
+    sourceSets {
+        main.java.srcDirs += 'src/main/kotlin'
+    }
+
+    defaultConfig {
+        minSdkVersion 21
+        targetSdkVersion 34
+    }
+
+    dependencies {
+        implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
+        
+        // Reference to our native Android SDK
+        // TODO: Uncomment when native Android SDK is properly integrated
+        // implementation project(path: ':android-sdk')
+    }
+}
