@@ -60,14 +60,16 @@ class IaSkanSettings {
     return {
       'enabled': enabled,
       'manualConversionManagement': manualConversionManagement,
-      'waitForTrackingAuthorizationTimeout': waitForTrackingAuthorizationTimeout,
+      'waitForTrackingAuthorizationTimeout':
+          waitForTrackingAuthorizationTimeout,
     };
   }
 }
 
 /// Callback function types
 typedef ConversionValueCallback = void Function(int conversionValue);
-typedef ConversionValuesCallback = void Function(int conversionValue, int coarse, bool lock);
+typedef ConversionValuesCallback = void Function(
+    int conversionValue, int coarse, bool lock);
 typedef AttributionCallback = void Function(Map<String, dynamic> attribution);
 
 /// Main configuration class for IA Tracking SDK
@@ -78,6 +80,7 @@ class IaTrackingConfig {
   // Optional user identification
   String? userId;
   String? deviceId;
+  String? appId;
 
   // Privacy settings
   IaPrivacySettings privacy;
@@ -108,6 +111,7 @@ class IaTrackingConfig {
   IaTrackingConfig({
     this.apiKey,
     this.userId,
+    this.appId,
     this.deviceId,
     IaPrivacySettings? privacy,
     IaSkanSettings? skanSettings,
@@ -117,16 +121,18 @@ class IaTrackingConfig {
     this.enableLogging = false,
     this.enableDebugMode = false,
     this.platformSettings = const {},
-  }) : privacy = privacy ?? IaPrivacySettings(),
-       skanSettings = skanSettings ?? IaSkanSettings();
+  })  : privacy = privacy ?? IaPrivacySettings(),
+        skanSettings = skanSettings ?? IaSkanSettings();
 
   /// Add a global property that will be attached to all events
-  void addGlobalProperty(String key, String value, {bool overrideExisting = true}) {
+  void addGlobalProperty(String key, String value,
+      {bool overrideExisting = true}) {
     // Remove existing property with same key if overrideExisting is true
     if (overrideExisting) {
       _globalProperties.removeWhere((prop) => prop.key == key);
     }
-    _globalProperties.add(IaGlobalProperty(key, value, overrideExisting: overrideExisting));
+    _globalProperties
+        .add(IaGlobalProperty(key, value, overrideExisting: overrideExisting));
   }
 
   /// Remove a global property
@@ -140,7 +146,8 @@ class IaTrackingConfig {
   }
 
   /// Get read-only list of global properties
-  List<IaGlobalProperty> get globalProperties => List.unmodifiable(_globalProperties);
+  List<IaGlobalProperty> get globalProperties =>
+      List.unmodifiable(_globalProperties);
 
   /// Set conversion value callback (iOS SKAdNetwork)
   void setConversionValueCallback(ConversionValueCallback callback) {
@@ -162,6 +169,7 @@ class IaTrackingConfig {
     final Map<String, dynamic> config = {
       'apiKey': apiKey,
       'userId': userId,
+      'appId': appId,
       'deviceId': deviceId,
       'sessionTimeoutMinutes': sessionTimeoutMinutes,
       'enableAutoFlush': enableAutoFlush,
@@ -169,7 +177,8 @@ class IaTrackingConfig {
       'enableLogging': enableLogging,
       'enableDebugMode': enableDebugMode,
       'privacy': privacy.toMap(),
-      'globalProperties': _globalProperties.map((prop) => prop.toMap()).toList(),
+      'globalProperties':
+          _globalProperties.map((prop) => prop.toMap()).toList(),
       'platformSettings': platformSettings,
     };
 
@@ -190,6 +199,7 @@ class IaTrackingConfig {
   IaTrackingConfig copyWith({
     String? apiKey,
     String? userId,
+    String? appId,
     String? deviceId,
     IaPrivacySettings? privacy,
     IaSkanSettings? skanSettings,
@@ -203,10 +213,12 @@ class IaTrackingConfig {
     final newConfig = IaTrackingConfig(
       apiKey: apiKey ?? this.apiKey,
       userId: userId ?? this.userId,
+      appId: appId ?? this.appId,
       deviceId: deviceId ?? this.deviceId,
       privacy: privacy ?? this.privacy,
       skanSettings: skanSettings ?? this.skanSettings,
-      sessionTimeoutMinutes: sessionTimeoutMinutes ?? this.sessionTimeoutMinutes,
+      sessionTimeoutMinutes:
+          sessionTimeoutMinutes ?? this.sessionTimeoutMinutes,
       enableAutoFlush: enableAutoFlush ?? this.enableAutoFlush,
       autoFlushIntervalMs: autoFlushIntervalMs ?? this.autoFlushIntervalMs,
       enableLogging: enableLogging ?? this.enableLogging,

@@ -58,6 +58,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
     private var isInitialized = false
     private var isEnabled = true
     private var currentUserId: String? = null
+    private var appId: String? = null // Optional, can be set during initialization
     private var currentSessionId: String = generateSessionId()
     private var apiUrl: String? = null // Must be provided during initialization
     private var apiKey: String? = null
@@ -101,6 +102,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
         val elementId: String?,
         val elementType: String?,
         val userId: String?,
+        val appId: String?,
         val sessionId: String,
         val timestamp: Long,
         val properties: Map<String, Any?>,
@@ -544,6 +546,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
             
             // Extract configuration
             currentUserId = arguments?.get("userId") as? String
+            appId = arguments?.get("appId") as? String
             apiKey = arguments?.get("apiKey") as? String
             val configServerUrl = arguments?.get("serverUrl") as? String
             
@@ -636,6 +639,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
                     elementId = null,
                     elementType = null,
                     userId = currentUserId,
+                    appId = appId,
                     sessionId = currentSessionId,
                     timestamp = System.currentTimeMillis(),
                     properties = mapOf(
@@ -688,6 +692,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
                     elementId = elementId,
                     elementType = "button",
                     userId = currentUserId,
+                    appId = appId,
                     sessionId = currentSessionId,
                     timestamp = System.currentTimeMillis(),
                     properties = properties,
@@ -720,6 +725,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
                     elementId = elementId,
                     elementType = "input",
                     userId = currentUserId,
+                    appId = appId,
                     sessionId = currentSessionId,
                     timestamp = System.currentTimeMillis(),
                     properties = mapOf(
@@ -756,6 +762,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
                     elementId = null,
                     elementType = null,
                     userId = currentUserId,
+                    appId = appId,
                     sessionId = currentSessionId,
                     timestamp = System.currentTimeMillis(),
                     properties = mapOf(
@@ -794,6 +801,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
                     elementId = null,
                     elementType = "search",
                     userId = currentUserId,
+                    appId = appId,
                     sessionId = currentSessionId,
                     timestamp = System.currentTimeMillis(),
                     properties = mapOf(
@@ -832,6 +840,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
                     elementId = elementId,
                     elementType = "custom",
                     userId = currentUserId,
+                    appId = appId,
                     sessionId = currentSessionId,
                     timestamp = System.currentTimeMillis(),
                     properties = mapOf(
@@ -1036,6 +1045,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
             
             // Extract enhanced configuration
             currentUserId = arguments?.get("userId") as? String
+            appId = arguments?.get("appId") as? String
             apiKey = arguments?.get("apiKey") as? String
             currentDeviceId = arguments?.get("deviceId") as? String
             sessionTimeoutMinutes = arguments?.get("sessionTimeoutMinutes") as? Int ?: 30
@@ -1112,6 +1122,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
                     elementId = null,
                     elementType = "revenue",
                     userId = currentUserId,
+                    appId = appId,
                     sessionId = currentSessionId,
                     timestamp = System.currentTimeMillis(),
                     properties = revenueProperties,
@@ -1175,6 +1186,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
                     elementId = productId,
                     elementType = "iap",
                     userId = currentUserId,
+                    appId = appId,
                     sessionId = currentSessionId,
                     timestamp = System.currentTimeMillis(),
                     properties = iapProperties,
@@ -1448,6 +1460,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
                         elementId = null,
                         elementType = "notification",
                         userId = currentUserId,
+                        appId = appId,
                         sessionId = currentSessionId,
                         timestamp = System.currentTimeMillis(),
                         properties = mapOf(

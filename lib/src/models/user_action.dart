@@ -16,6 +16,7 @@ class UserAction {
     this.deviceInfo,
     this.appVersion,
     this.sdkVersion,
+    this.appId,
     this.isSynced = false,
     this.retryCount = 0,
   });
@@ -30,6 +31,7 @@ class UserAction {
       elementId: map['elementId'],
       elementType: map['elementType'],
       userId: map['userId'],
+      appId: map['appId'],
       sessionId: map['sessionId'],
       properties: map['properties'] != null
           ? Map<String, dynamic>.from(map['properties'])
@@ -86,6 +88,9 @@ class UserAction {
   /// Number of retry attempts for failed sync operations
   final int retryCount;
 
+  /// Application ID when action was recorded
+  final String? appId;
+
   /// Convert to Map for method channel communication
   Map<String, dynamic> toMap() {
     return {
@@ -96,6 +101,7 @@ class UserAction {
       'elementId': elementId,
       'elementType': elementType,
       'userId': userId,
+      'appId': appId,
       'sessionId': sessionId,
       'properties': properties,
       'deviceInfo': deviceInfo,
@@ -115,6 +121,7 @@ class UserAction {
     String? elementId,
     String? elementType,
     String? userId,
+    String? appId,
     String? sessionId,
     Map<String, dynamic>? properties,
     Map<String, dynamic>? deviceInfo,
@@ -131,6 +138,7 @@ class UserAction {
       elementId: elementId ?? this.elementId,
       elementType: elementType ?? this.elementType,
       userId: userId ?? this.userId,
+      appId: appId ?? this.appId,
       sessionId: sessionId ?? this.sessionId,
       properties: properties ?? this.properties,
       deviceInfo: deviceInfo ?? this.deviceInfo,
@@ -149,7 +157,8 @@ class UserAction {
         'screenName: $screenName, '
         'elementId: $elementId, '
         'timestamp: $timestamp, '
-        'isSynced: $isSynced)';
+        'isSynced: $isSynced, '
+        'appId: $appId)';
   }
 
   @override
@@ -170,6 +179,7 @@ class UserAction {
           appVersion == other.appVersion &&
           sdkVersion == other.sdkVersion &&
           isSynced == other.isSynced &&
+          appId == other.appId &&
           retryCount == other.retryCount;
 
   @override
@@ -187,5 +197,6 @@ class UserAction {
       appVersion.hashCode ^
       sdkVersion.hashCode ^
       isSynced.hashCode ^
-      retryCount.hashCode;
+      retryCount.hashCode ^
+      appId.hashCode;
 }
