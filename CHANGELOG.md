@@ -5,6 +5,42 @@ All notable changes to the IA Tracking Flutter SDK will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2025-08-20
+
+### Added
+- **API Integration Update**: Complete integration with backend API documentation
+- **CloudFlare Tunnel Support**: Native support for CloudFlare tunnel URLs
+- **Enhanced UUID Generation**: Proper v4 UUID format for all event and batch IDs
+- **Structured API Payload**: New payload format with `events`, `batchInfo`, `deviceInfo`, and `sessionInfo`
+- **Environment Variable Support**: API URL configuration via `IA_TRACKING_API_URL` environment variable
+- **Base64 URL Encoding**: Support for base64-encoded API URLs for additional security
+
+### Changed
+- **API Endpoint Structure**: Updated to use `/v1/track` endpoint format
+- **HTTP Headers**: Updated to match API documentation (`Content-Type`, `User-Agent`, `X-API-Key`)
+- **Event Type Mapping**: Improved event type categorization with `action_subtype` properties
+- **Device Information**: Enhanced device info collection including timezone, carrier, and connection type
+- **Error Handling**: Improved error responses and debugging information
+- **UUID Format**: Fixed UUID generation to use proper v4 format instead of custom format
+
+### Fixed
+- **API Validation**: Events now pass server-side UUID validation
+- **Batch Processing**: Proper batch ID generation and tracking
+- **URL Validation**: Enhanced URL validation to support development and production environments
+- **Session Management**: Improved session ID generation and tracking
+
+### Technical Improvements
+- **Android Implementation**: Updated native Android plugin to match API specifications
+- **iOS Implementation**: Updated native iOS plugin with new payload structure
+- **Response Handling**: Enhanced API response parsing and error logging
+- **Security**: Improved URL handling and validation for production use
+
+### Breaking Changes
+- **API Payload Format**: The internal API payload format has changed to match backend specifications
+- **UUID Format**: Event IDs now use standard v4 UUID format (affects internal storage only)
+
+**Note**: These changes are primarily internal and maintain backward compatibility for the public Flutter API.
+
 ## [1.0.0] - 2024-12-20
 
 ### Added

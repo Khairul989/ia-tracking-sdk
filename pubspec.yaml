@@ -1,6 +1,6 @@
 name: ia_tracking
 description: IA Tracking Flutter SDK - Cross-platform user action tracking with native Android and iOS integration
-version: 1.0.0
+version: 1.1.0
 homepage: https://github.com/iav3/ia-tracking-flutter-sdk
 repository: https://github.com/iav3/ia-tracking-flutter-sdk
 issue_tracker: https://github.com/iav3/ia-tracking-flutter-sdk/issues

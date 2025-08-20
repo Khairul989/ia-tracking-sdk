@@ -2,6 +2,8 @@ package com.iav3.iatracking
 
 import android.content.Context
 import android.util.Log
+import android.telephony.TelephonyManager
+import android.net.ConnectivityManager
 import androidx.annotation.NonNull
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodCall
@@ -42,13 +44,10 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
         private const val CHANNEL_NAME = "ia_tracking"
         private const val FLUSH_INTERVAL_MS = 5000L // 5 seconds
         
-        // Hardcoded API endpoints - replace with your actual endpoints
-        private const val API_BASE_URL = "https://api.iatracking.com"
-        private const val TRACKING_ENDPOINT = "$API_BASE_URL/v1/track"
-        
-        // Development endpoints (you can switch based on build config)
-        private const val DEV_API_BASE_URL = "https://dev-api.iatracking.com"
-        private const val STAGING_API_BASE_URL = "https://staging-api.iatracking.com"
+        // Default API base URL (can be overridden in initialization)
+        private const val DEFAULT_API_BASE_URL = "https://sorted-berlin-pf-onto.trycloudflare.com"
+        private const val API_VERSION = "v1"
+        private const val TRACKING_ENDPOINT = "track"
     }
 
     private lateinit var channel: MethodChannel
@@ -80,7 +79,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
     // SDK info
     private var wrapperName: String? = null
     private var wrapperVersion: String? = null
-    private val sdkVersion = "1.0.0"
+    private val sdkVersion = "1.1.0"
     
     // Action storage with sync tracking
     private val userActions = Collections.synchronizedList(mutableListOf<UserAction>())
@@ -113,8 +112,9 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
     )
     
     // Helper functions
-    private fun generateActionId(): String = "action_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}"
-    private fun generateSessionId(): String = "session_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}"
+    private fun generateActionId(): String = UUID.randomUUID().toString()
+    private fun generateSessionId(): String = UUID.randomUUID().toString()
+    private fun generateBatchId(): String = UUID.randomUUID().toString()
     
     /**
      * Collect GAID asynchronously on background thread (called once during initialization)
@@ -158,9 +158,14 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
     
     private fun createDeviceInfo(): Map<String, Any?> {
         val deviceInfo = mutableMapOf<String, Any?>(
-            "platform" to "android",
-            "deviceModel" to android.os.Build.MODEL,
+            "platform" to "Android",
             "osVersion" to android.os.Build.VERSION.RELEASE,
+            "appVersion" to "1.0.0", // This should come from app context
+            "deviceModel" to android.os.Build.MODEL,
+            "locale" to java.util.Locale.getDefault().toString(),
+            "timezone" to java.util.TimeZone.getDefault().id,
+            "carrier" to getCarrierName(),
+            "connection" to getConnectionType(),
             "manufacturer" to android.os.Build.MANUFACTURER,
             "brand" to android.os.Build.BRAND,
             "product" to android.os.Build.PRODUCT,
@@ -186,6 +191,29 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
         }
         
         return deviceInfo.toMap()
+    }
+    
+    private fun getCarrierName(): String {
+        return try {
+            val manager = context.getSystemService(Context.TELEPHONY_SERVICE) as? android.telephony.TelephonyManager
+            manager?.networkOperatorName ?: "Unknown"
+        } catch (e: Exception) {
+            "Unknown"
+        }
+    }
+    
+    private fun getConnectionType(): String {
+        return try {
+            val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+            val activeNetwork = connectivityManager?.activeNetworkInfo
+            when (activeNetwork?.type) {
+                android.net.ConnectivityManager.TYPE_WIFI -> "wifi"
+                android.net.ConnectivityManager.TYPE_MOBILE -> "cellular"
+                else -> "unknown"
+            }
+        } catch (e: Exception) {
+            "unknown"
+        }
     }
     
     /**
@@ -391,7 +419,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
     }
     
     /**
-     * Send actions to the remote API
+     * Send actions to the remote API using the documented format
      */
     private suspend fun sendActionsToApi(actions: List<UserAction>): Boolean {
         return withContext(Dispatchers.IO) {
@@ -403,35 +431,92 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
                     return@withContext false
                 }
                 
-                val jsonPayload = gson.toJson(mapOf(
-                    "actions" to actions,
-                    "metadata" to mapOf(
-                        "sdkVersion" to "1.0.0",
-                        "platform" to "android",
-                        "timestamp" to System.currentTimeMillis()
+                // Convert actions to the API format
+                val events = actions.map { action ->
+                    val event = mutableMapOf<String, Any?>(
+                        "id" to action.id,
+                        "actionType" to action.actionType,
+                        "timestamp" to action.timestamp,
+                        "userId" to action.userId,
+                        "sessionId" to action.sessionId,
+                        "appVersion" to (action.appVersion ?: "1.0.0"),
+                        "sdkVersion" to action.sdkVersion
                     )
-                ))
+                    
+                    // Add optional fields if present
+                    action.screenName?.let { event["screenName"] = it }
+                    action.elementId?.let { event["elementId"] = it }
+                    action.elementType?.let { event["elementType"] = it }
+                    
+                    // Merge properties with global properties
+                    val allProperties = mutableMapOf<String, Any?>()
+                    allProperties.putAll(action.properties)
+                    allProperties.putAll(globalProperties)
+                    if (allProperties.isNotEmpty()) {
+                        event["properties"] = allProperties
+                    }
+                    
+                    // Add device info
+                    event["deviceInfo"] = action.deviceInfo
+                    
+                    // Add global properties as separate field
+                    if (globalProperties.isNotEmpty()) {
+                        event["globalProperties"] = globalProperties
+                    }
+                    
+                    event
+                }
                 
+                // Create batch info
+                val batchId = generateBatchId()
+                val batchInfo = mapOf(
+                    "batchId" to batchId,
+                    "eventCount" to events.size,
+                    "flushReason" to "auto_flush",
+                    "flushTimestamp" to System.currentTimeMillis()
+                )
+                
+                // Create session info
+                val sessionInfo = mapOf(
+                    "sessionId" to currentSessionId,
+                    "sessionStart" to System.currentTimeMillis(), // Would be better to track actual session start
+                    "userId" to currentUserId
+                )
+                
+                // Create complete payload according to API documentation
+                val payload = mapOf(
+                    "events" to events,
+                    "batchInfo" to batchInfo,
+                    "deviceInfo" to createDeviceInfo(),
+                    "sessionInfo" to sessionInfo
+                )
+                
+                val jsonPayload = gson.toJson(payload)
                 val requestBody = jsonPayload.toRequestBody("application/json".toMediaType())
+                
                 val requestBuilder = Request.Builder()
                     .url(currentApiUrl)
                     .post(requestBody)
                     .addHeader("Content-Type", "application/json")
-                    .addHeader("User-Agent", "IA-Tracking-Android-SDK/1.0.0")
+                    .addHeader("User-Agent", "IA-Tracking-SDK/1.1.0 (Platform: Android)")
                 
-                // Add API key if configured
+                // Add API key header if configured
                 apiKey?.let { key ->
-                    requestBuilder.addHeader("Authorization", "Bearer $key")
+                    requestBuilder.addHeader("X-API-Key", key)
                 }
                 
                 val request = requestBuilder.build()
                 
                 httpClient.newCall(request).execute().use { response ->
                     if (response.isSuccessful) {
+                        val responseBody = response.body?.string()
                         Log.d(TAG, "API request successful: ${response.code}")
+                        Log.d(TAG, "Response: $responseBody")
                         true
                     } else {
+                        val errorBody = response.body?.string()
                         Log.w(TAG, "API request failed: ${response.code} - ${response.message}")
+                        Log.w(TAG, "Error response: $errorBody")
                         false
                     }
                 }
@@ -455,9 +540,19 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
             // Extract configuration
             currentUserId = arguments?.get("userId") as? String
             apiKey = arguments?.get("apiKey") as? String
+            val configServerUrl = arguments?.get("serverUrl") as? String
             
-            // Use hardcoded API endpoint
-            apiUrl = TRACKING_ENDPOINT
+            // Resolve API URL with priority: env var > config > default
+            val resolvedApiUrl = resolveApiUrl(configServerUrl) ?: "$DEFAULT_API_BASE_URL/$API_VERSION/$TRACKING_ENDPOINT"
+            
+            // Validate and set API URL
+            if (isValidApiUrl(resolvedApiUrl)) {
+                apiUrl = resolvedApiUrl
+            } else {
+                // Fall back to default for development
+                apiUrl = "$DEFAULT_API_BASE_URL/$API_VERSION/$TRACKING_ENDPOINT"
+                Log.w(TAG, "Invalid API URL provided, using default")
+            }
             
             // Start new session
             currentSessionId = generateSessionId()
@@ -483,18 +578,26 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
         return try {
             val parsedUrl = java.net.URL(url)
             
-            // Must be HTTPS for security
-            if (parsedUrl.protocol != "https") {
-                Log.w(TAG, "API URL must use HTTPS protocol")
+            // Must be HTTPS for security (allow HTTP for development/testing)
+            if (parsedUrl.protocol != "https" && parsedUrl.protocol != "http") {
+                Log.w(TAG, "API URL must use HTTP or HTTPS protocol")
                 return false
             }
             
-            // Basic domain validation - prevent localhost, private IPs, etc.
+            // Allow CloudFlare tunnel URLs and development hosts
             val host = parsedUrl.host.lowercase()
+            
+            // Allow CloudFlare tunnel domains
+            if (host.contains("trycloudflare.com")) {
+                Log.d(TAG, "CloudFlare tunnel URL detected and allowed")
+                return true
+            }
+            
+            // Allow localhost and development IPs for testing
             if (host == "localhost" || host.startsWith("127.") || host.startsWith("192.168.") || 
                 host.startsWith("10.") || host.startsWith("172.")) {
-                Log.w(TAG, "Private/local IP addresses not allowed for API URL")
-                return false
+                Log.d(TAG, "Development/local URL detected and allowed")
+                return true
             }
             
             // Must have valid domain structure
@@ -640,7 +743,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
                 
                 val action = UserAction(
                     id = generateActionId(),
-                    actionType = "navigation",
+                    actionType = "custom",
                     screenName = toScreen,
                     elementId = null,
                     elementType = null,
@@ -648,6 +751,8 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
                     sessionId = currentSessionId,
                     timestamp = System.currentTimeMillis(),
                     properties = mapOf(
+                        "event_name" to "navigation",
+                        "action_subtype" to "navigation",
                         "from_screen" to fromScreen,
                         "to_screen" to toScreen,
                         "navigation_method" to method
@@ -676,7 +781,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
                 
                 val action = UserAction(
                     id = generateActionId(),
-                    actionType = "search",
+                    actionType = "custom",
                     screenName = screenName,
                     elementId = null,
                     elementType = "search",
@@ -684,6 +789,8 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
                     sessionId = currentSessionId,
                     timestamp = System.currentTimeMillis(),
                     properties = mapOf(
+                        "event_name" to "search",
+                        "action_subtype" to "search",
                         "search_query" to query,
                         "results_count" to resultsCount
                     ),
@@ -712,7 +819,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
                 
                 val action = UserAction(
                     id = generateActionId(),
-                    actionType = "custom_event",
+                    actionType = "custom",
                     screenName = screenName,
                     elementId = elementId,
                     elementType = "custom",
@@ -721,6 +828,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
                     timestamp = System.currentTimeMillis(),
                     properties = mapOf(
                         "event_name" to eventName,
+                        "action_subtype" to "custom_event",
                         "element_id" to elementId
                     ) + properties,
                     deviceInfo = createDeviceInfo(),
@@ -923,6 +1031,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
             apiKey = arguments?.get("apiKey") as? String
             currentDeviceId = arguments?.get("deviceId") as? String
             sessionTimeoutMinutes = arguments?.get("sessionTimeoutMinutes") as? Int ?: 30
+            val configServerUrl = arguments?.get("serverUrl") as? String
             
             // Extract privacy settings
             val privacy = arguments?.get("privacy") as? Map<String, Any>
@@ -941,8 +1050,17 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
                 }
             }
             
-            // Use hardcoded API endpoint
-            apiUrl = TRACKING_ENDPOINT
+            // Resolve API URL with priority: env var > config > default
+            val resolvedApiUrl = resolveApiUrl(configServerUrl) ?: "$DEFAULT_API_BASE_URL/$API_VERSION/$TRACKING_ENDPOINT"
+            
+            // Validate and set API URL
+            if (isValidApiUrl(resolvedApiUrl)) {
+                apiUrl = resolvedApiUrl
+            } else {
+                // Fall back to default for development
+                apiUrl = "$DEFAULT_API_BASE_URL/$API_VERSION/$TRACKING_ENDPOINT"
+                Log.w(TAG, "Invalid API URL provided, using default")
+            }
             currentSessionId = generateSessionId()
             isInitialized = true
             startAutoFlush()
@@ -1317,7 +1435,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
                 coroutineScope.launch {
                     val action = UserAction(
                         id = generateActionId(),
-                        actionType = "push_notification_received",
+                        actionType = "custom",
                         screenName = null,
                         elementId = null,
                         elementType = "notification",
@@ -1325,6 +1443,8 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
                         sessionId = currentSessionId,
                         timestamp = System.currentTimeMillis(),
                         properties = mapOf(
+                            "event_name" to "push_notification_received",
+                            "action_subtype" to "push_notification",
                             "notification_payload" to notificationPayload,
                             "platform" to "android"
                         ) + globalProperties,

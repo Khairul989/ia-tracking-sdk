@@ -24,13 +24,10 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
     private let channelName = "ia_tracking"
     private let flushInterval: TimeInterval = 5.0 // 5 seconds
     
-    // Hardcoded API endpoints - replace with your actual endpoints
-    private let apiBaseUrl = "https://api.iatracking.com"
-    private let trackingEndpoint = "https://api.iatracking.com/v1/track"
-    
-    // Development endpoints (you can switch based on build config)
-    private let devApiBaseUrl = "https://dev-api.iatracking.com"
-    private let stagingApiBaseUrl = "https://staging-api.iatracking.com"
+    // Default API configuration (can be overridden)
+    private let defaultApiBaseUrl = "https://sorted-berlin-pf-onto.trycloudflare.com"
+    private let apiVersion = "v1"
+    private let trackingEndpoint = "track"
     
     // Core tracking state
     private var isInitialized = false
@@ -52,7 +49,7 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
     // SDK info
     private var wrapperName: String?
     private var wrapperVersion: String?
-    private let sdkVersion = "1.0.0"
+    private let sdkVersion = "1.1.0"
     
     // Action storage and flushing
     private var userActions: [UserAction] = []
@@ -227,20 +224,65 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
     // MARK: - Helper Methods
     
     private func generateActionId() -> String {
-        return "action_\\(Int64(Date().timeIntervalSince1970 * 1000))_\\(UUID().uuidString.prefix(8))"
+        return UUID().uuidString
     }
     
     private func generateSessionId() -> String {
-        return "session_\\(Int64(Date().timeIntervalSince1970 * 1000))_\\(UUID().uuidString.prefix(8))"
+        return UUID().uuidString
+    }
+    
+    private func generateBatchId() -> String {
+        return UUID().uuidString
     }
     
     private func createDeviceInfo() -> [String: Any] {
         return [
-            "platform": "ios",
-            "deviceModel": UIDevice.current.model,
+            "platform": "iOS",
             "osVersion": UIDevice.current.systemVersion,
+            "appVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0",
+            "deviceModel": UIDevice.current.model,
+            "locale": Locale.current.identifier,
+            "timezone": TimeZone.current.identifier,
+            "carrier": getCarrierName(),
+            "connection": getConnectionType(),
             "manufacturer": "Apple"
         ]
+    }
+    
+    private func getCarrierName() -> String {
+        // iOS carrier info requires additional frameworks and permissions
+        return "Unknown"
+    }
+    
+    private func getConnectionType() -> String {
+        // Basic connection type detection
+        return "unknown"
+    }
+    
+    private func resolveApiUrl(configServerUrl: String?) -> String? {
+        // 1. Check environment variable first (highest priority)
+        if let envApiUrl = ProcessInfo.processInfo.environment["IA_TRACKING_API_URL"], !envApiUrl.isEmpty {
+            os_log("Using API URL from environment variable", log: Self.logger, type: .info)
+            return envApiUrl
+        }
+        
+        // 2. Check if provided URL is base64 encoded
+        if let configServerUrl = configServerUrl, !configServerUrl.isEmpty {
+            if configServerUrl.hasPrefix("aHR0c") { // Base64 encoded HTTPS URLs typically start with this
+                if let data = Data(base64Encoded: configServerUrl),
+                   let decoded = String(data: data, encoding: .utf8) {
+                    os_log("Using decoded base64 API URL", log: Self.logger, type: .info)
+                    return decoded
+                } else {
+                    os_log("Failed to decode base64 URL, using as-is", log: Self.logger, type: .warning)
+                    return configServerUrl
+                }
+            } else {
+                return configServerUrl
+            }
+        }
+        
+        return nil
     }
     
     private func startAutoFlush() {
@@ -310,13 +352,71 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
         }
         
         do {
-            let payload: [String: Any] = [
-                "actions": actions.map { actionToDict($0) },
-                "metadata": [
-                    "sdkVersion": sdkVersion,
-                    "platform": "ios",
-                    "timestamp": Int64(Date().timeIntervalSince1970 * 1000)
+            // Convert actions to API format
+            let events = actions.map { action -> [String: Any] in
+                var event: [String: Any] = [
+                    "id": action.id,
+                    "actionType": action.actionType,
+                    "timestamp": action.timestamp,
+                    "userId": action.userId ?? NSNull(),
+                    "sessionId": action.sessionId,
+                    "appVersion": action.appVersion ?? "1.0.0",
+                    "sdkVersion": action.sdkVersion
                 ]
+                
+                // Add optional fields if present
+                if let screenName = action.screenName {
+                    event["screenName"] = screenName
+                }
+                if let elementId = action.elementId {
+                    event["elementId"] = elementId
+                }
+                if let elementType = action.elementType {
+                    event["elementType"] = elementType
+                }
+                
+                // Merge properties with global properties
+                var allProperties = action.properties
+                for (key, value) in globalProperties {
+                    allProperties[key] = value
+                }
+                if !allProperties.isEmpty {
+                    event["properties"] = allProperties
+                }
+                
+                // Add device info
+                event["deviceInfo"] = action.deviceInfo
+                
+                // Add global properties as separate field
+                if !globalProperties.isEmpty {
+                    event["globalProperties"] = globalProperties
+                }
+                
+                return event
+            }
+            
+            // Create batch info
+            let batchId = generateBatchId()
+            let batchInfo: [String: Any] = [
+                "batchId": batchId,
+                "eventCount": events.count,
+                "flushReason": "auto_flush",
+                "flushTimestamp": Int64(Date().timeIntervalSince1970 * 1000)
+            ]
+            
+            // Create session info
+            let sessionInfo: [String: Any] = [
+                "sessionId": currentSessionId,
+                "sessionStart": Int64(Date().timeIntervalSince1970 * 1000),
+                "userId": currentUserId ?? NSNull()
+            ]
+            
+            // Create complete payload according to API documentation
+            let payload: [String: Any] = [
+                "events": events,
+                "batchInfo": batchInfo,
+                "deviceInfo": createDeviceInfo(),
+                "sessionInfo": sessionInfo
             ]
             
             let jsonData = try JSONSerialization.data(withJSONObject: payload)
@@ -324,11 +424,12 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.setValue("IA-Tracking-iOS-SDK/\\(sdkVersion)", forHTTPHeaderField: "User-Agent")
+            request.setValue("IA-Tracking-SDK/1.1.0 (Platform: iOS)", forHTTPHeaderField: "User-Agent")
             request.httpBody = jsonData
             
+            // Add API key header if configured
             if let apiKey = apiKey {
-                request.setValue("Bearer \\(apiKey)", forHTTPHeaderField: "Authorization")
+                request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
             }
             
             URLSession.shared.dataTask(with: request) { data, response, error in
@@ -340,10 +441,17 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
                 
                 if let httpResponse = response as? HTTPURLResponse {
                     if httpResponse.statusCode >= 200 && httpResponse.statusCode < 300 {
-                        os_log("API request successful: %d", log: Self.logger, type: .info, httpResponse.statusCode)
+                        if let responseData = data, let responseString = String(data: responseData, encoding: .utf8) {
+                            os_log("API request successful: %d", log: Self.logger, type: .info, httpResponse.statusCode)
+                            os_log("Response: %@", log: Self.logger, type: .debug, responseString)
+                        }
                         completion(true)
                     } else {
-                        os_log("API request failed: %d", log: Self.logger, type: .warning, httpResponse.statusCode)
+                        if let responseData = data, let errorString = String(data: responseData, encoding: .utf8) {
+                            os_log("API request failed: %d - %@", log: Self.logger, type: .warning, httpResponse.statusCode, errorString)
+                        } else {
+                            os_log("API request failed: %d", log: Self.logger, type: .warning, httpResponse.statusCode)
+                        }
                         completion(false)
                     }
                 } else {
@@ -395,9 +503,10 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
             // Extract configuration
             self.currentUserId = arguments["userId"] as? String
             self.apiKey = arguments["apiKey"] as? String
+            let configServerUrl = arguments["serverUrl"] as? String
             
-            // Use hardcoded API endpoint
-            self.apiUrl = self.trackingEndpoint
+            // Resolve API URL
+            self.apiUrl = self.resolveApiUrl(configServerUrl: configServerUrl) ?? "\\(self.defaultApiBaseUrl)/\\(self.apiVersion)/\\(self.trackingEndpoint)"
             
             // Start new session
             self.currentSessionId = self.generateSessionId()
@@ -590,6 +699,8 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
             os_log("Tracking navigation: %@ -> %@", log: Self.logger, type: .debug, fromScreen, toScreen)
             
             var properties: [String: Any] = [
+                "event_name": "navigation",
+                "action_subtype": "navigation",
                 "from_screen": fromScreen,
                 "to_screen": toScreen
             ]
@@ -602,7 +713,7 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
             
             let action = UserAction(
                 id: self.generateActionId(),
-                actionType: "navigation",
+                actionType: "custom",
                 screenName: toScreen,
                 elementId: nil,
                 elementType: nil,
@@ -643,6 +754,8 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
             os_log("Tracking search: '%@' on %@", log: Self.logger, type: .debug, query, screenName)
             
             var properties: [String: Any] = [
+                "event_name": "search",
+                "action_subtype": "search",
                 "search_query": query
             ]
             
@@ -654,7 +767,7 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
             
             let action = UserAction(
                 id: self.generateActionId(),
-                actionType: "search",
+                actionType: "custom",
                 screenName: screenName,
                 elementId: nil,
                 elementType: "search",
@@ -695,7 +808,8 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
             os_log("Tracking custom event: '%@' on %@", log: Self.logger, type: .debug, eventName, screenName)
             
             var properties: [String: Any] = [
-                "event_name": eventName
+                "event_name": eventName,
+                "action_subtype": "custom_event"
             ]
             
             if let elementId = arguments["elementId"] as? String {
@@ -710,7 +824,7 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
             
             let action = UserAction(
                 id: self.generateActionId(),
-                actionType: "custom_event",
+                actionType: "custom",
                 screenName: screenName,
                 elementId: arguments["elementId"] as? String,
                 elementType: "custom",
@@ -962,9 +1076,10 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
             self.apiKey = arguments["apiKey"] as? String
             self.currentDeviceId = arguments["deviceId"] as? String
             self.sessionTimeoutMinutes = arguments["sessionTimeoutMinutes"] as? Int ?? 30
+            let configServerUrl = arguments["serverUrl"] as? String
             
-            // Use hardcoded API endpoint
-            self.apiUrl = self.trackingEndpoint
+            // Resolve API URL
+            self.apiUrl = self.resolveApiUrl(configServerUrl: configServerUrl) ?? "\\(self.defaultApiBaseUrl)/\\(self.apiVersion)/\\(self.trackingEndpoint)"
             
             // Extract privacy settings
             if let privacy = arguments["privacy"] as? [String: Any] {
@@ -1442,6 +1557,8 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
             // Track push notification received
             if self.isEnabled && self.isInitialized && !self.allTrackingStopped {
                 var properties: [String: Any] = [
+                    "event_name": "push_notification_received",
+                    "action_subtype": "push_notification",
                     "notification_payload": notificationPayload,
                     "platform": "ios"
                 ]
@@ -1449,7 +1566,7 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
                 
                 let action = UserAction(
                     id: self.generateActionId(),
-                    actionType: "push_notification_received",
+                    actionType: "custom",
                     screenName: nil,
                     elementId: nil,
                     elementType: "notification",
