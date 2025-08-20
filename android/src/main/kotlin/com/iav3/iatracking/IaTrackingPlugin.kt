@@ -45,7 +45,7 @@ class IaTrackingPlugin : FlutterPlugin, MethodCallHandler {
         private const val FLUSH_INTERVAL_MS = 5000L // 5 seconds
         
         // Default API base URL (can be overridden in initialization)
-        private const val DEFAULT_API_BASE_URL = "https://sorted-berlin-pf-onto.trycloudflare.com"
+        private const val DEFAULT_API_BASE_URL = "https://enormous-right-mule.ngrok-free.app"
         private const val API_VERSION = "v1"
         private const val TRACKING_ENDPOINT = "track"
     }

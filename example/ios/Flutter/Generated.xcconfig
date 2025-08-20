@@ -1,6 +1,6 @@
 // This is a generated file; do not edit or check into version control.
 FLUTTER_ROOT=/Users/khairul/.asdf/installs/flutter/3.27.4-stable
-FLUTTER_APPLICATION_PATH=/Volumes/KhaiSSD/Documents/Github/work/ia/mobile/iav3mobile_ext_dev/sdks/flutter-sdk/example
+FLUTTER_APPLICATION_PATH=/Volumes/KhaiSSD/Documents/Github/useful_git/sdks/flutter-sdk/example
 COCOAPODS_PARALLEL_CODE_SIGN=true
 FLUTTER_TARGET=lib/main.dart
 FLUTTER_BUILD_DIR=build

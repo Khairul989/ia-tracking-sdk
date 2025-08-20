@@ -84,7 +84,7 @@ class _MyHomePageState extends State<MyHomePage> {
         maxRetentionDays: 30,
         sessionTimeoutMinutes: 30,
         batchSize: 50,
-        serverUrl: 'https://sorted-berlin-pf-onto.trycloudflare.com/v1/track',
+        serverUrl: 'https://enormous-right-mule.ngrok-free.app/v1/track',
         apiKey: 'demo-api-key-12345',
         debugMode: true,
       );

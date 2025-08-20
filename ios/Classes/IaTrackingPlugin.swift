@@ -25,7 +25,7 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
     private let flushInterval: TimeInterval = 5.0 // 5 seconds
     
     // Default API configuration (can be overridden)
-    private let defaultApiBaseUrl = "https://sorted-berlin-pf-onto.trycloudflare.com"
+    private let defaultApiBaseUrl = "https://enormous-right-mule.ngrok-free.app"
     private let apiVersion = "v1"
     private let trackingEndpoint = "track"
     
