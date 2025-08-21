@@ -62,11 +62,11 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
     
     // IDFA and ATT (App Tracking Transparency) state
     private var cachedIDFA: String?
-    private var cachedATTStatus: ATTrackingManager.AuthorizationStatus?
+    private var cachedATTStatus: Any? // Will hold ATTrackingManager.AuthorizationStatus on iOS 14+
     private var idfaCollectionAttempted = false
     
     // Data structure for user actions
-    struct UserAction: Codable {
+    struct UserAction {
         let id: String
         let actionType: String
         let screenName: String?
@@ -81,11 +81,6 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
         let sdkVersion: String
         var isSynced: Bool = false
         var retryCount: Int = 0
-        
-        enum CodingKeys: String, CodingKey {
-            case id, actionType, screenName, elementId, elementType, userId, sessionId
-            case timestamp, properties, deviceInfo, appVersion, sdkVersion, isSynced, retryCount
-        }
         
         init(id: String, actionType: String, screenName: String?, elementId: String?, elementType: String?, 
              userId: String?, sessionId: String, timestamp: Int64, properties: [String: Any], 
@@ -266,7 +261,11 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
         // Add cached IDFA if collection has been attempted
         if idfaCollectionAttempted {
             deviceInfo["idfa"] = cachedIDFA
-            deviceInfo["attStatus"] = attStatusToString(cachedATTStatus)
+            if #available(iOS 14.0, *) {
+                deviceInfo["attStatus"] = attStatusToString(cachedATTStatus)
+            } else {
+                deviceInfo["attStatus"] = cachedIDFA != nil ? "authorized" : "denied"
+            }
             
             if cachedIDFA != nil {
                 os_log("Using cached IDFA in device info", log: Self.logger, type: .debug)
@@ -293,11 +292,11 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
         return "unknown"
     }
     
-    private func attStatusToString(_ status: ATTrackingManager.AuthorizationStatus?) -> String {
+    private func attStatusToString(_ status: Any?) -> String {
         if #available(iOS 14.5, *) {
-            guard let status = status else { return "unknown" }
+            guard let attStatus = status as? ATTrackingManager.AuthorizationStatus else { return "unknown" }
             
-            switch status {
+            switch attStatus {
             case .authorized:
                 return "authorized"
             case .denied:
@@ -311,7 +310,10 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
             }
         } else {
             // For iOS < 14.5, return simplified status based on LAT setting
-            return status == .authorized ? "authorized" : "denied"
+            if #available(iOS 14.0, *), let attStatus = status as? ATTrackingManager.AuthorizationStatus {
+                return attStatus == .authorized ? "authorized" : "denied"
+            }
+            return "unknown"
         }
     }
     
@@ -330,7 +332,7 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
                     os_log("Using decoded base64 API URL", log: Self.logger, type: .info)
                     return decoded
                 } else {
-                    os_log("Failed to decode base64 URL, using as-is", log: Self.logger, type: .warning)
+                    os_log("Failed to decode base64 URL, using as-is", log: Self.logger, type: .error)
                     return configServerUrl
                 }
             } else {
@@ -379,7 +381,7 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
                 @unknown default:
                     // Future ATT status values
                     self.cachedIDFA = nil
-                    os_log("Unknown ATT status, IDFA not collected", log: Self.logger, type: .warning)
+                    os_log("Unknown ATT status, IDFA not collected", log: Self.logger, type: .error)
                 }
             } else {
                 // iOS < 14.5, no ATT required
@@ -395,7 +397,9 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
                 }
                 
                 // Set a compatible ATT status for older iOS versions
-                self.cachedATTStatus = isLimitAdTrackingEnabled ? .authorized : .denied
+                if #available(iOS 14.0, *) {
+                    self.cachedATTStatus = isLimitAdTrackingEnabled ? ATTrackingManager.AuthorizationStatus.authorized : ATTrackingManager.AuthorizationStatus.denied
+                }
             }
         }
     }
@@ -452,7 +456,7 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
                                 self.userActions[i].retryCount += 1
                             }
                         }
-                        os_log("Failed to sync actions, retry count incremented", log: Self.logger, type: .warning)
+                        os_log("Failed to sync actions, retry count incremented", log: Self.logger, type: .error)
                     }
                 }
             }
@@ -563,9 +567,9 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
                         completion(true)
                     } else {
                         if let responseData = data, let errorString = String(data: responseData, encoding: .utf8) {
-                            os_log("API request failed: %d - %@", log: Self.logger, type: .warning, httpResponse.statusCode, errorString)
+                            os_log("API request failed: %d - %@", log: Self.logger, type: .error, httpResponse.statusCode, errorString)
                         } else {
-                            os_log("API request failed: %d", log: Self.logger, type: .warning, httpResponse.statusCode)
+                            os_log("API request failed: %d", log: Self.logger, type: .error, httpResponse.statusCode)
                         }
                         completion(false)
                     }
@@ -1557,7 +1561,7 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
                 result(nil)
             }
         } else {
-            os_log("SKAdNetwork not available on iOS < 14.0", log: Self.logger, type: .warning)
+            os_log("SKAdNetwork not available on iOS < 14.0", log: Self.logger, type: .error)
             result(nil)
         }
     }
@@ -1580,7 +1584,7 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
             os_log("SKAdNetwork conversion value updated to: %d", log: Self.logger, type: .info, newConversionValue)
             result(true)
         } else {
-            os_log("SKAdNetwork not available on iOS < 14.0", log: Self.logger, type: .warning)
+            os_log("SKAdNetwork not available on iOS < 14.0", log: Self.logger, type: .error)
             result(false)
         }
     }
@@ -1631,7 +1635,7 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
             
             conversionValue = newConversionValue
         } else {
-            os_log("SKAdNetwork 4.0 features not available on iOS < 16.1", log: Self.logger, type: .warning)
+            os_log("SKAdNetwork 4.0 features not available on iOS < 16.1", log: Self.logger, type: .error)
             result(nil)
         }
     }
@@ -1763,13 +1767,23 @@ public class IaTrackingPlugin: NSObject, FlutterPlugin {
     }
     
     private func getTrackingAuthorizationStatus(result: @escaping FlutterResult) {
-        let statusString = attStatusToString(cachedATTStatus)
+        let statusString: String
+        if #available(iOS 14.0, *) {
+            statusString = attStatusToString(cachedATTStatus)
+        } else {
+            statusString = cachedIDFA != nil ? "authorized" : "denied"
+        }
         os_log("Current ATT authorization status: %@", log: Self.logger, type: .debug, statusString)
         result(statusString)
     }
     
     private func isTrackingAuthorized(result: @escaping FlutterResult) {
-        let isAuthorized = cachedATTStatus == .authorized
+        let isAuthorized: Bool
+        if #available(iOS 14.0, *), let attStatus = cachedATTStatus as? ATTrackingManager.AuthorizationStatus {
+            isAuthorized = attStatus == .authorized
+        } else {
+            isAuthorized = cachedIDFA != nil
+        }
         os_log("Is tracking authorized: %@", log: Self.logger, type: .debug, String(isAuthorized))
         result(isAuthorized)
     }
